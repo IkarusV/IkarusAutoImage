@@ -1,0 +1,224 @@
+<div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b>🦅 Ikarus Auto Image</b>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content">
+
+        <!-- ===== Section 1: Image Generation ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon">🖼️</span> Image Generation</div>
+            <div class="ikarus-row">
+                <label for="ikarus_insert_type">Insert Mode</label>
+                <select id="ikarus_insert_type" class="text_pole widthNatural margin0">
+                    <option value="inline">Insert In Current Message</option>
+                    <option value="replace">Inline Replace Mode</option>
+                    <option value="new">Create New Message</option>
+                    <option value="disabled">Disabled</option>
+                </select>
+            </div>
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_prompt_injection_enabled">
+                <span>Enable Prompt Injection</span>
+            </label>
+            <div class="ikarus-hint">Injects a system prompt instructing the AI to produce image tags</div>
+        </div>
+
+        <!-- ===== Section 2: Prompt Presets ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon">📋</span> Prompt Presets</div>
+            <div class="ikarus-preset-row">
+                <select id="ikarus_preset_select" class="text_pole">
+                    <option value="">-- Default --</option>
+                </select>
+                <button id="ikarus_preset_save" class="menu_button" title="Save current as preset">💾</button>
+                <button id="ikarus_preset_delete" class="menu_button" title="Delete selected preset">🗑️</button>
+            </div>
+            <div>
+                <label for="ikarus_prompt_text">Prompt Template</label>
+                <textarea id="ikarus_prompt_text" class="text_pole textarea_compact" rows="4"
+                    placeholder="System prompt instructing AI to generate image tags"></textarea>
+            </div>
+            <div>
+                <label for="ikarus_prompt_regex">Regex Pattern</label>
+                <textarea id="ikarus_prompt_regex" class="text_pole textarea_compact" rows="2"
+                    placeholder="Regex to extract image prompts from AI response"></textarea>
+            </div>
+            <div class="ikarus-row">
+                <div>
+                    <label for="ikarus_prompt_position">Position</label>
+                    <select id="ikarus_prompt_position" class="text_pole widthNatural margin0">
+                        <option value="deep_system">@D ⚙️ System</option>
+                        <option value="deep_user">@D 👤 User</option>
+                        <option value="deep_assistant">@D 🤖 AI</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="ikarus_prompt_depth">Depth</label>
+                    <input id="ikarus_prompt_depth" class="text_pole widthUnset" type="number" min="0" max="100"
+                        value="0">
+                    <div class="ikarus-hint">0 = end of chat</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== Character Prompt (per card) ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title" id="ikarus_char_prompt_label"><span class="icon">📝</span> Character Prompt</div>
+            <div class="ikarus-hint" style="margin-bottom:6px;">5 slots per character card. Only the active slot is injected via <code>{CharacterPersonalised-prompt}</code> macro. Dot = slot has content.</div>
+            <div id="ikarus_char_slots" class="ikarus-slot-row"></div>
+            <textarea id="ikarus_char_prompt" class="text_pole textarea_compact" rows="5" placeholder="Select a character first..."></textarea>
+        </div>
+
+        <!-- ===== Section 3: Replacements ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon">🔄</span> Replacements</div>
+            <div class="ikarus-hint" style="margin-bottom:6px;">Find trigger words and swap them in-place. Supports
+                children (more specific variants that auto-win over parent). Click 👶 on a card to add a child.</div>
+
+            <div class="ikarus-scope-tabs">
+                <button id="ikarus_rep_scope_global" class="active">🌐 Global</button>
+                <button id="ikarus_rep_scope_char">👤 This Character</button>
+                <button id="ikarus_rep_manage" class="ikarus-manage-btn" title="Organize global replacements into folders">📂 Manage</button>
+            </div>
+
+            <div id="ikarus_replacement_list" class="ikarus-card-list"></div>
+
+            <div class="ikarus-add-form">
+                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon">➕</span>
+                    Add Replacement</div>
+                <label>Name</label>
+                <input id="ikarus_rep_name" type="text" class="text_pole" placeholder="e.g. Sakura Tags">
+                <label>Find (trigger words, comma-separated)</label>
+                <input id="ikarus_rep_trigger" type="text" class="text_pole" placeholder="e.g. sakura, haruno sakura">
+                <label>Replace with</label>
+                <textarea id="ikarus_rep_replacement" class="text_pole textarea_compact" rows="2"
+                    placeholder="e.g. 1girl, pink_hair, green_eyes, <lora:sakura:0.8>"></textarea>
+                <div class="ikarus-row">
+                    <div>
+                        <label>Match</label>
+                        <select id="ikarus_rep_match" class="text_pole">
+                            <option value="OR">OR (any word)</option>
+                            <option value="AND">AND (all words)</option>
+                            <option value="CHILD">CHILD (only if parent fires)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Mode</label>
+                        <select id="ikarus_rep_mode" class="text_pole">
+                            <option value="first">First occurrence</option>
+                            <option value="all">All occurrences</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Priority</label>
+                        <input id="ikarus_rep_priority" type="number" class="text_pole" value="0" min="0" max="100">
+                    </div>
+                </div>
+                <button id="ikarus_rep_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add
+                    Replacement</button>
+            </div>
+        </div>
+
+        <!-- ===== Section 4: Filters ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon">🚫</span> Filters</div>
+            <div class="ikarus-hint" style="margin-bottom:6px;">Trigger-based actions: remove words, append tags, or
+                replace text when trigger keywords are detected.</div>
+
+            <div class="ikarus-scope-tabs">
+                <button id="ikarus_flt_scope_global" class="active">🌐 Global</button>
+                <button id="ikarus_flt_scope_char">👤 This Character</button>
+            </div>
+
+            <div id="ikarus_filter_list" class="ikarus-card-list"></div>
+
+            <div class="ikarus-add-form">
+                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon">➕</span>
+                    Add Filter</div>
+                <label>Name</label>
+                <input id="ikarus_flt_name" type="text" class="text_pole" placeholder="e.g. Beach Night Mood">
+                <label>Trigger words (comma-separated)</label>
+                <input id="ikarus_flt_trigger" type="text" class="text_pole" placeholder="e.g. beach, night">
+                <div class="ikarus-row">
+                    <div>
+                        <label>Match</label>
+                        <select id="ikarus_flt_match" class="text_pole">
+                            <option value="OR">OR (any word)</option>
+                            <option value="AND">AND (all words)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Action</label>
+                        <select id="ikarus_flt_action" class="text_pole">
+                            <option value="remove">Remove</option>
+                            <option value="append">Append</option>
+                            <option value="replace">Replace</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>Target</label>
+                        <select id="ikarus_flt_target" class="text_pole">
+                            <option value="positive">Positive</option>
+                            <option value="negative">Negative</option>
+                            <option value="both">Both</option>
+                        </select>
+                    </div>
+                </div>
+                <!-- Action text: changes label based on selected action -->
+                <div id="ikarus_flt_find_row" style="display:none;">
+                    <label>Find text</label>
+                    <input id="ikarus_flt_find_text" type="text" class="text_pole" placeholder="e.g. day">
+                </div>
+                <div>
+                    <label id="ikarus_flt_action_label">Pattern to remove (comma-separated)</label>
+                    <textarea id="ikarus_flt_action_text" class="text_pole textarea_compact" rows="2"
+                        placeholder="e.g. bad anatomy, extra fingers"></textarea>
+                </div>
+                <button id="ikarus_flt_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add Filter</button>
+            </div>
+        </div>
+
+        <!-- ===== Section 5: Processing & Cleaners ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon">⚙️</span> Processing & Cleaners</div>
+
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_invert_order">
+                <span>Invert order: run Filters before Replacements</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Default: Replacements → Filters → Double Cleaner</div>
+
+            <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
+
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">🧹</span> Auto-Cleaner</div>
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_auto_clean">
+                <span>Auto-clean image tags from messages</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Strips &lt;pic&gt; tags from the displayed message after
+                generation</div>
+
+            <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
+
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">✂️</span> Double Cleaner</div>
+            <div class="ikarus-hint" style="margin-bottom:4px;">Runs after all replacements and filters. Strips
+                duplicate tags from the final prompt.</div>
+            <div class="ikarus-row">
+                <label>Mode</label>
+                <select id="ikarus_dc_mode" class="text_pole">
+                    <option value="none">Disabled</option>
+                    <option value="all">Strip All Duplicates</option>
+                    <option value="listed">Strip Listed Tags Only</option>
+                </select>
+            </div>
+            <div id="ikarus_dc_tags_row" style="display:none;">
+                <label>Tags to watch (comma-separated)</label>
+                <textarea id="ikarus_dc_tags" class="text_pole textarea_compact" rows="2"
+                    placeholder="e.g. 1girl, solo, pink_hair"></textarea>
+                <div class="ikarus-hint">Only duplicates of these specific tags will be removed</div>
+            </div>
+        </div>
+
+    </div>
+</div>
