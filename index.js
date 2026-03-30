@@ -664,8 +664,9 @@ function openGlobalManager() {
                     </div>
                 </div>
                 <div class="ikarus-mgr-trigger"><b>Find:</b> ${esc(r.trigger)} <em>(${r.matchMode || 'OR'})</em></div>
-                <div class="ikarus-mgr-replace"><b>→</b> ${esc((r.replacement || '').substring(0, 120))}${(r.replacement || '').length > 120 ? '…' : ''}</div>
-                <div class="ikarus-mgr-meta">Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0}${children.length ? ` | ${children.length} child(ren)` : ''}</div>
+                <div class="ikarus-mgr-replace"><b>🏷️</b> ${esc((r.replacement || '').substring(0, 120))}${(r.replacement || '').length > 120 ? '…' : ''}</div>
+                ${r.caption && r.caption !== r.replacement ? `<div class="ikarus-mgr-replace"><b>💬</b> ${esc((r.caption || '').substring(0, 120))}${(r.caption || '').length > 120 ? '…' : ''}</div>` : ''}
+                <div class="ikarus-mgr-meta">Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0}${children.length ? ` | ${children.length} child(ren)` : ''} | Active: ${es.repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
                 <div class="ikarus-mgr-editform" id="ikarus_mgr_editform_${esc(r.id)}" style="display:none;"></div>
             </div>`;
         }
