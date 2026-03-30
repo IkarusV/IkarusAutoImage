@@ -91,9 +91,12 @@
                 <input id="ikarus_rep_name" type="text" class="text_pole" placeholder="e.g. Sakura Tags">
                 <label>Find (trigger words, comma-separated)</label>
                 <input id="ikarus_rep_trigger" type="text" class="text_pole" placeholder="e.g. sakura, haruno sakura">
-                <label>Replace with</label>
+                <label>Tags 🏷️ (danbooru-style replacement)</label>
                 <textarea id="ikarus_rep_replacement" class="text_pole textarea_compact" rows="2"
                     placeholder="e.g. 1girl, pink_hair, green_eyes, <lora:sakura:0.8>"></textarea>
+                <label>Caption 💬 (natural language replacement)</label>
+                <textarea id="ikarus_rep_caption" class="text_pole textarea_compact" rows="2"
+                    placeholder="Same as tags, or a descriptive sentence (optional)"></textarea>
                 <div class="ikarus-row">
                     <div>
                         <label>Match</label>
@@ -188,6 +191,15 @@
                 <span>Invert order: run Filters before Replacements</span>
             </label>
             <div class="ikarus-hint" style="margin-bottom:8px;">Default: Replacements → Filters → Double Cleaner</div>
+
+            <div class="ikarus-row" style="align-items:center;gap:8px;margin-bottom:8px;">
+                <label style="margin:0;font-weight:600;">Replacement mode:</label>
+                <select id="ikarus_rep_field_mode" class="text_pole" style="max-width:150px;">
+                    <option value="tags">🏷️ Tags (danbooru)</option>
+                    <option value="caption">💬 Caption (sentence)</option>
+                </select>
+            </div>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Selects which field is used when replacements fire: Tags or Caption.</div>
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 

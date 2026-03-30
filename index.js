@@ -37,8 +37,9 @@ const DEFAULT_SETTINGS = {
     activePresetId: '', // currently selected preset ID
     // Per-character prompt: keyed by charId → string
     charPrompts: {},
-    // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, replaceMode, priority, parentId, enabled, folder}
+    // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, caption, replaceMode, priority, parentId, enabled, folder}
     replacements: [],
+    repFieldMode: 'tags', // 'tags' or 'caption' — which field to use during replacement
     repFolders: [], // folder names for organizing global replacements
     repCategories: [], // category names (parent of folders)
     folderCategories: {}, // mapping: folder name → category name
@@ -141,8 +142,12 @@ function ensureSettings() {
     if (!Array.isArray(es.repFolders)) es.repFolders = [];
     if (!Array.isArray(es.repCategories)) es.repCategories = [];
     if (!es.folderCategories || typeof es.folderCategories !== 'object') es.folderCategories = {};
-    // Ensure each replacement has a folder field
-    for (const r of (es.replacements || [])) { if (r.folder === undefined) r.folder = ''; }
+    if (!es.repFieldMode) es.repFieldMode = 'tags';
+    // Ensure each replacement has folder and caption fields
+    for (const r of (es.replacements || [])) {
+        if (r.folder === undefined) r.folder = '';
+        if (r.caption === undefined) r.caption = r.replacement || '';
+    }
     if (!Array.isArray(es.filters)) es.filters = [];
     if (es.invertProcessingOrder === undefined) es.invertProcessingOrder = false;
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
@@ -348,8 +353,9 @@ function renderRepCard(r, isChild) {
         </div>
         <div class="card-details">
             <div><b class="trigger-label">Find:</b> ${esc(r.trigger)} <em>(${r.matchMode || 'OR'})</em></div>
-            <div><b class="replace-label">→</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? '…' : ''}</div>
-            <div>Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? '👤' : '🌐'}</span>${r.folder ? ` | 📁 ${esc(r.folder)}` : ''}</div>
+            <div><b class="replace-label">🏷️</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? '…' : ''}</div>
+            ${r.caption && r.caption !== r.replacement ? `<div><b class="replace-label">💬</b> ${esc((r.caption || '').substring(0, 100))}${(r.caption || '').length > 100 ? '…' : ''}</div>` : ''}
+            <div>Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? '👤' : '🌐'}</span>${r.folder ? ` | 📁 ${esc(r.folder)}` : ''} | ${s().repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
         </div>
     </div>`;
 }
@@ -358,21 +364,23 @@ function addReplacement(parentId) {
     const name = $('#ikarus_rep_name').val()?.trim();
     const trigger = $('#ikarus_rep_trigger').val()?.trim();
     const replacement = $('#ikarus_rep_replacement').val()?.trim();
+    const caption = $('#ikarus_rep_caption').val()?.trim() || replacement;
     const matchMode = $('#ikarus_rep_match').val() || 'OR';
     const replaceMode = $('#ikarus_rep_mode').val() || 'first';
     const priority = parseInt($('#ikarus_rep_priority').val()) || 0;
 
     if (!trigger) { toastr.warning('Trigger is required'); return; }
-    if (!replacement) { toastr.warning('Replacement text is required'); return; }
+    if (!replacement && !caption) { toastr.warning('Tags or Caption text is required'); return; }
 
     s().replacements.push({
         id: uid(), name: name || trigger, scope: currentRepScope,
         charId: currentRepScope === 'char' ? getCurrentCharId() : null,
-        trigger, matchMode, replacement, replaceMode, priority,
+        trigger, matchMode, replacement: replacement || caption, caption: caption || replacement,
+        replaceMode, priority,
         parentId: parentId || null, enabled: true,
     });
     saveSettingsDebounced(); renderReplacementList();
-    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement').val('');
+    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption').val('');
     $('#ikarus_rep_priority').val('0');
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
@@ -380,7 +388,8 @@ function addReplacement(parentId) {
 function editReplacement(id) {
     const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
     $('#ikarus_rep_name').val(r.name); $('#ikarus_rep_trigger').val(r.trigger);
-    $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_match').val(r.matchMode || 'OR');
+    $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || '');
+    $('#ikarus_rep_match').val(r.matchMode || 'OR');
     $('#ikarus_rep_mode').val(r.replaceMode || 'first'); $('#ikarus_rep_priority').val(r.priority || 0);
     // Store parentId for re-adding
     $('#ikarus_rep_add').data('parent-id', r.parentId || '');
@@ -630,7 +639,7 @@ function openGlobalManager() {
         const folders = es.repFolders || [];
         const folderOpts = folders.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
 
-        let html = `<div class="ikarus-mgr-toolbar"><button id="ikarus_mgr_add" class="menu_button">➕ Add New Replacement</button></div>`;
+        let html = `<div class="ikarus-mgr-toolbar"><button id="ikarus_mgr_add" class="menu_button">➕ Add New</button><button id="ikarus_mgr_bulk" class="menu_button" style="margin-top:4px;">📦 Bulk Import JSON</button></div>`;
 
         if (!filtered.length) {
             html += '<div style="text-align:center;opacity:0.4;padding:24px;">No replacements found.</div>';
@@ -671,7 +680,8 @@ function openGlobalManager() {
             <div class="ikarus-mgr-edit-grid">
                 <label>Name</label><input class="text_pole mgr-ed-name" value="${esc(r.name || '')}" />
                 <label>Trigger</label><input class="text_pole mgr-ed-trigger" value="${esc(r.trigger || '')}" />
-                <label>Replacement</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
+                <label>Tags (🏷️)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
+                <label>Caption (💬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
                 <label>Match</label>
                 <select class="text_pole mgr-ed-match">
                     <option value="OR"${r.matchMode === 'OR' ? ' selected' : ''}>OR</option>
@@ -705,7 +715,8 @@ function openGlobalManager() {
             <div class="ikarus-mgr-edit-grid">
                 <label>Name</label><input class="text_pole mgr-new-name" placeholder="e.g. Bloom(Winx)" />
                 <label>Trigger</label><input class="text_pole mgr-new-trigger" placeholder="e.g. bloom, Bloom winx, bloom winx club" />
-                <label>Replacement</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
+                <label>Tags (🏷️)</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
+                <label>Caption (💬)</label><textarea class="text_pole mgr-new-caption" rows="2" placeholder="Same as tags, or a descriptive caption"></textarea>
                 <label>Match</label>
                 <select class="text_pole mgr-new-match"><option value="OR">OR</option><option value="AND">AND</option><option value="CHILD">CHILD</option></select>
                 <label>Priority</label><input class="text_pole mgr-new-priority" type="number" value="0" />
@@ -831,6 +842,7 @@ function openGlobalManager() {
         r.name = form.find('.mgr-ed-name').val()?.trim() || r.name;
         r.trigger = form.find('.mgr-ed-trigger').val()?.trim() || r.trigger;
         r.replacement = form.find('.mgr-ed-replacement').val()?.trim() || r.replacement;
+        r.caption = form.find('.mgr-ed-caption').val()?.trim() || r.caption || r.replacement;
         r.matchMode = form.find('.mgr-ed-match').val() || 'OR';
         r.replaceMode = form.find('.mgr-ed-mode').val() || 'first';
         r.priority = parseInt(form.find('.mgr-ed-priority').val()) || 0;
@@ -848,15 +860,17 @@ function openGlobalManager() {
     overlay.on('click', '#ikarus_mgr_addconfirm', function () {
         const trigger = $('#ikarus_mgr_addform .mgr-new-trigger').val()?.trim();
         const replacement = $('#ikarus_mgr_addform .mgr-new-replacement').val()?.trim();
+        const caption = $('#ikarus_mgr_addform .mgr-new-caption').val()?.trim();
         if (!trigger) { toastr.warning('Trigger is required'); return; }
-        if (!replacement) { toastr.warning('Replacement text is required'); return; }
+        if (!replacement && !caption) { toastr.warning('Tags or Caption text is required'); return; }
         es.replacements.push({
             id: uid(),
             name: $('#ikarus_mgr_addform .mgr-new-name').val()?.trim() || trigger,
             scope: 'global', charId: null,
             trigger,
             matchMode: $('#ikarus_mgr_addform .mgr-new-match').val() || 'OR',
-            replacement,
+            replacement: replacement || caption || '',
+            caption: caption || replacement || '',
             replaceMode: 'first',
             priority: parseInt($('#ikarus_mgr_addform .mgr-new-priority').val()) || 0,
             parentId: null, enabled: true,
@@ -868,6 +882,80 @@ function openGlobalManager() {
     // Add new — cancel
     overlay.on('click', '#ikarus_mgr_addcancel', function () {
         $('#ikarus_mgr_addform').slideUp(150, function () { $(this).remove(); });
+    });
+    // Bulk import
+    overlay.on('click', '#ikarus_mgr_bulk', function () {
+        const existing = $('#ikarus_mgr_bulkform');
+        if (existing.length) { existing.slideToggle(150); return; }
+        const folders = es.repFolders || [];
+        let folderSel = `<option value="">— Unfiled —</option>`;
+        for (const f of folders) {
+            folderSel += `<option value="${esc(f)}"${activeFolder && activeFolder === f ? ' selected' : ''}>${esc(f)}</option>`;
+        }
+        const form = $(`<div id="ikarus_mgr_bulkform" class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);">
+            <div class="ikarus-mgr-name" style="margin-bottom:6px;">📦 Bulk Import — Paste JSON</div>
+            <div class="ikarus-hint" style="font-size:10px;margin-bottom:6px;opacity:0.6;">
+                Format: <code>{"key": {"aliases": [...], "tags": "...", "caption": "..."}}</code>
+            </div>
+            <textarea class="text_pole mgr-bulk-json" rows="8" placeholder='Paste JSON here...\n\nExample:\n{"asuna_sao": {"aliases": ["asuna", "yuuki asuna"], "tags": "asuna (sao), 1girl, ...", "caption": "asuna (sao), 1girl, ..."}}'></textarea>
+            <div class="ikarus-mgr-edit-grid" style="grid-template-columns:auto 1fr; margin-top:6px;">
+                <label>Scope</label>
+                <select class="text_pole mgr-bulk-scope">
+                    <option value="global">🌐 Global</option>
+                    <option value="char">👤 Current Character</option>
+                </select>
+                <label>Folder</label><select class="text_pole mgr-bulk-folder">${folderSel}</select>
+            </div>
+            <div class="ikarus-mgr-edit-btns">
+                <button class="menu_button" id="ikarus_mgr_bulkconfirm">📦 Import All</button>
+                <button class="menu_button" id="ikarus_mgr_bulkcancel">Cancel</button>
+            </div>
+        </div>`);
+        $('#ikarus_manager_cards .ikarus-mgr-toolbar').after(form);
+    });
+    // Bulk import — confirm
+    overlay.on('click', '#ikarus_mgr_bulkconfirm', function () {
+        const raw = $('#ikarus_mgr_bulkform .mgr-bulk-json').val()?.trim();
+        const scope = $('#ikarus_mgr_bulkform .mgr-bulk-scope').val() || 'global';
+        const folder = $('#ikarus_mgr_bulkform .mgr-bulk-folder').val() || '';
+        const charId = scope === 'char' ? getCurrentCharId() : null;
+        if (scope === 'char' && !charId) { toastr.warning('Select a character first'); return; }
+        if (!raw) { toastr.warning('Paste JSON data first'); return; }
+        let data;
+        try { data = JSON.parse(raw); } catch (e) { toastr.error('Invalid JSON: ' + e.message); return; }
+        if (typeof data !== 'object' || Array.isArray(data)) { toastr.error('JSON must be an object with named entries'); return; }
+        let count = 0;
+        for (const [key, entry] of Object.entries(data)) {
+            if (!entry || typeof entry !== 'object') continue;
+            const aliases = Array.isArray(entry.aliases) ? entry.aliases : [];
+            const trigger = aliases.join(', ');
+            const tags = entry.tags || '';
+            const caption = entry.caption || tags;
+            if (!trigger && !tags) continue;
+            es.replacements.push({
+                id: uid(), name: key.replace(/_/g, ' '),
+                scope, charId,
+                trigger: trigger || key.replace(/_/g, ' '),
+                matchMode: 'OR',
+                replacement: tags,
+                caption: caption,
+                replaceMode: 'first', priority: 0,
+                parentId: null, enabled: true,
+                folder: scope === 'global' ? folder : '',
+            });
+            count++;
+        }
+        if (count) {
+            saveSettingsDebounced(); renderManagerCards(); renderReplacementList();
+            toastr.success(`${count} replacement(s) imported`);
+            $('#ikarus_mgr_bulkform').slideUp(150, function () { $(this).remove(); });
+        } else {
+            toastr.warning('No valid entries found in JSON');
+        }
+    });
+    // Bulk import — cancel
+    overlay.on('click', '#ikarus_mgr_bulkcancel', function () {
+        $('#ikarus_mgr_bulkform').slideUp(150, function () { $(this).remove(); });
     });
 }
 
@@ -952,11 +1040,13 @@ function triggerMatches(text, rule) {
 
 function doReplace(text, rule) {
     const keywords = rule.trigger.split(',').map(k => k.trim()).filter(Boolean);
+    // Use tags or caption based on the global toggle
+    const activeText = s().repFieldMode === 'caption' ? (rule.caption || rule.replacement || '') : (rule.replacement || '');
     let result = text;
     for (const kw of keywords) {
         const escaped = escRegex(kw);
         const flags = rule.replaceMode === 'all' ? 'gi' : 'i';
-        result = result.replace(new RegExp(`\\b${escaped}\\b`, flags), rule.replacement.trim());
+        result = result.replace(new RegExp(`\\b${escaped}\\b`, flags), activeText.trim());
     }
     return cleanPrompt(result);
 }
@@ -1279,6 +1369,12 @@ async function createSettings(html) {
 
     // Section 5: Processing & Cleaners
     $('#ikarus_invert_order').on('change', function () { s().invertProcessingOrder = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_rep_field_mode').val(s().repFieldMode || 'tags');
+    $('#ikarus_rep_field_mode').on('change', function () {
+        s().repFieldMode = $(this).val(); saveSettingsDebounced();
+        renderReplacementList();
+        toastr.info(`Replacement mode: ${$(this).val() === 'caption' ? '💬 Caption' : '🏷️ Tags'}`);
+    });
     $('#ikarus_auto_clean').on('change', function () { s().autoClean = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_dc_mode').on('change', function () {
         s().doubleCleaner.mode = $(this).val(); saveSettingsDebounced();
