@@ -11,6 +11,9 @@ import {
     eventSource,
     event_types,
     updateMessageBlock,
+    setExtensionPrompt,
+    extension_prompt_roles,
+    extension_prompt_types,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
@@ -21,6 +24,7 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 // ==========================================================================
 const EXT = 'IkarusAutoImage';
 const EXT_PATH = `/scripts/extensions/third-party/${EXT}`;
+const PROMPT_KEY = `${EXT}_PROMPT`;
 
 const INSERT_TYPE = { DISABLED: 'disabled', INLINE: 'inline', NEW_MESSAGE: 'new', REPLACE: 'replace' };
 
@@ -29,6 +33,7 @@ You must insert a <pic prompt="example prompt"> at end of the reply. Prompts are
 </image_generation>`;
 
 const DEFAULT_REGEX = '/\\[pic[^\\]]*?prompt="([^"]*)"[^\\]]*?\\]/g';
+const FALLBACK_PIC_REGEX = /[\[<]pic\b[^>\]]*?prompt="([^"]*)"[^>\]]*?[\]>]/gi;
 
 const DEFAULT_SETTINGS = {
     insertType: INSERT_TYPE.DISABLED,
@@ -203,7 +208,7 @@ function loadPreset(pid) {
     es.activePresetId = pid || '';
     if (!pid) { Object.assign(es.promptInjection, { prompt: DEFAULT_PROMPT, regex: DEFAULT_REGEX, position: 'deep_system', depth: 0 }); }
     else { const p = es.presets.find(x => x.id === pid); if (!p) return; Object.assign(es.promptInjection, { prompt: p.prompt, regex: p.regex, position: p.position, depth: p.depth }); toastr.info(`Loaded: ${p.name}`); }
-    saveSettingsDebounced(); updateUI();
+    syncPromptInjection(); saveSettingsDebounced(); updateUI();
 }
 function deletePreset() {
     const es = s();
@@ -272,6 +277,7 @@ function switchCharSlot(slotIndex) {
     data.active = slotIndex;
     saveSettingsDebounced();
     loadCharPrompt();
+    syncPromptInjection();
 }
 
 function saveCharPrompt() {
@@ -1213,21 +1219,35 @@ function getMesRole() {
     switch (s().promptInjection?.position) { case 'deep_user': return 'user'; case 'deep_assistant': return 'assistant'; default: return 'system'; }
 }
 
-eventSource.on(event_types.CHAT_COMPLETION_PROMPT_READY, async function (eventData) {
+function getExtensionPromptRole() {
+    switch (s().promptInjection?.position) {
+        case 'deep_user': return extension_prompt_roles.USER;
+        case 'deep_assistant': return extension_prompt_roles.ASSISTANT;
+        default: return extension_prompt_roles.SYSTEM;
+    }
+}
+
+function getPromptInjectionText() {
+    let promptText = s().promptInjection?.prompt || '';
+    const charPrompt = getCharPromptText();
+    promptText = promptText.replace(/\{CharacterPersonalised-prompt\}/gi, charPrompt);
+    return { promptText, charPrompt };
+}
+
+function syncPromptInjection() {
     try {
         const es = s();
-        if (!es.promptInjection?.enabled || es.insertType === INSERT_TYPE.DISABLED) return;
-        let promptText = es.promptInjection.prompt;
-        // Replace {CharacterPersonalised-prompt} macro with per-character text
-        const charPrompt = getCharPromptText();
-        promptText = promptText.replace(/\{CharacterPersonalised-prompt\}/gi, charPrompt);
-        const d = es.promptInjection.depth || 0;
-        const role = getMesRole();
-        if (!d) eventData.chat.push({ role, content: promptText });
-        else eventData.chat.splice(-d, 0, { role, content: promptText });
-        console.log(`[${EXT}] Prompt injected: role=${role}, depth=${d}, charPrompt=${charPrompt ? 'yes' : 'none'}`);
-    } catch (error) { console.error(`[${EXT}] Prompt injection error:`, error); }
-});
+        const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
+        const { promptText, charPrompt } = enabled ? getPromptInjectionText() : { promptText: '', charPrompt: '' };
+        const depth = Number(es.promptInjection?.depth || 0);
+        setExtensionPrompt(PROMPT_KEY, promptText, extension_prompt_types.IN_CHAT, depth, false, getExtensionPromptRole());
+        console.log(`[${EXT}] Native prompt ${enabled ? 'registered' : 'cleared'}: depth=${depth}, charPrompt=${charPrompt ? 'yes' : 'none'}`);
+    } catch (error) { console.error(`[${EXT}] Native prompt sync error:`, error); }
+}
+
+eventSource.on(event_types.GENERATION_STARTED, syncPromptInjection);
+eventSource.on(event_types.CHAT_LOADED, syncPromptInjection);
+eventSource.on(event_types.APP_READY, syncPromptInjection);
 
 // ==========================================================================
 // Character change detection — auto-refresh when switching cards
@@ -1236,6 +1256,7 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
     console.log(`[${EXT}] Chat changed — refreshing character-specific UI`);
     migrateCharKeys();
     loadCharPrompt();
+    syncPromptInjection();
     // Auto-switch to character scope and update tab UI
     const charId = getCurrentCharId();
     const charName = getCurrentCharName();
@@ -1258,6 +1279,32 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
 // ==========================================================================
 eventSource.on(event_types.MESSAGE_RECEIVED, handleIncomingMessage);
 
+function getImagePromptMatches(text, regexPattern) {
+    const found = [];
+    const seen = new Set();
+    const addMatch = (full, prompt) => {
+        if (!full || typeof prompt !== 'string' || seen.has(full)) return;
+        seen.add(full);
+        found.push({ full, prompt });
+    };
+
+    try {
+        const configuredRegex = regexFromString(regexPattern);
+        if (configuredRegex.global) {
+            for (const match of text.matchAll(configuredRegex)) addMatch(match?.[0], match?.[1]);
+        } else {
+            const match = text.match(configuredRegex);
+            addMatch(match?.[0], match?.[1]);
+        }
+    } catch (error) {
+        console.warn(`[${EXT}] Invalid configured image regex, using fallback matcher:`, error);
+    }
+
+    FALLBACK_PIC_REGEX.lastIndex = 0;
+    for (const match of text.matchAll(FALLBACK_PIC_REGEX)) addMatch(match?.[0], match?.[1]);
+    return found;
+}
+
 async function handleIncomingMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
@@ -1265,10 +1312,7 @@ async function handleIncomingMessage() {
     const message = context.chat[context.chat.length - 1];
     if (!message || message.is_user || !es.promptInjection?.regex) return;
 
-    const imgTagRegex = regexFromString(es.promptInjection.regex);
-    let matches;
-    if (imgTagRegex.global) matches = [...message.mes.matchAll(imgTagRegex)];
-    else { const m = message.mes.match(imgTagRegex); matches = m ? [m] : []; }
+    const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
     if (!matches.length) return;
 
     const mesIdx = context.chat.length - 1;
@@ -1281,7 +1325,7 @@ async function handleIncomingMessage() {
             if (message.extra.image && !message.extra.image_swipes.includes(message.extra.image)) message.extra.image_swipes.push(message.extra.image);
 
             for (const match of matches) {
-                let imgPrompt = typeof match?.[1] === 'string' ? match[1] : '';
+                let imgPrompt = match.prompt;
                 if (!imgPrompt.trim()) continue;
 
                 // Run the full processing pipeline
@@ -1297,7 +1341,7 @@ async function handleIncomingMessage() {
                     const messageElement = $(`.mes[mesid="${mesIdx}"]`);
                     appendMediaToMessage(message, messageElement); await context.saveChat();
                 } else if (es.insertType === INSERT_TYPE.REPLACE && typeof result === 'string' && result.trim()) {
-                    const tag = typeof match?.[0] === 'string' ? match[0] : ''; if (!tag) continue;
+                    const tag = match.full; if (!tag) continue;
                     // Slim img tag: only src, no bloated title/alt with full prompt
                     message.mes = message.mes.replace(tag, `<img src="${esc(result)}">`);
                     updateMessageBlock(mesIdx, message);
@@ -1334,20 +1378,20 @@ async function createSettings(html) {
     $('#ikarus_auto_image_container').empty().append(html);
 
     // Section 1: Image Generation
-    $('#ikarus_insert_type').on('change', function () { s().insertType = $(this).val(); updateUI(); saveSettingsDebounced(); });
-    $('#ikarus_prompt_injection_enabled').on('change', function () { s().promptInjection.enabled = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_insert_type').on('change', function () { s().insertType = $(this).val(); updateUI(); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_prompt_injection_enabled').on('change', function () { s().promptInjection.enabled = $(this).prop('checked'); syncPromptInjection(); saveSettingsDebounced(); });
 
     // Section 2: Presets
-    $('#ikarus_prompt_text').on('input', function () { s().promptInjection.prompt = $(this).val(); saveSettingsDebounced(); });
+    $('#ikarus_prompt_text').on('input', function () { s().promptInjection.prompt = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_prompt_regex').on('input', function () { s().promptInjection.regex = $(this).val(); saveSettingsDebounced(); });
-    $('#ikarus_prompt_position').on('change', function () { s().promptInjection.position = $(this).val(); saveSettingsDebounced(); });
-    $('#ikarus_prompt_depth').on('input', function () { s().promptInjection.depth = parseInt($(this).val()) || 0; saveSettingsDebounced(); });
+    $('#ikarus_prompt_position').on('change', function () { s().promptInjection.position = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_prompt_depth').on('input', function () { s().promptInjection.depth = parseInt($(this).val()) || 0; syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_preset_select').on('change', function () { loadPreset($(this).val()); });
     $('#ikarus_preset_save').on('click', savePreset);
     $('#ikarus_preset_delete').on('click', deletePreset);
 
     // Character Prompt (per-card, 5 slots)
-    $('#ikarus_char_prompt').on('input', saveCharPrompt);
+    $('#ikarus_char_prompt').on('input', function () { saveCharPrompt(); syncPromptInjection(); });
     $(document).on('click', '.ikarus-slot-btn', function () {
         switchCharSlot(parseInt($(this).data('slot')) || 0);
     });
@@ -1434,6 +1478,7 @@ $(function () {
         $('#extensionsMenu').append(`<div id="ikarus_auto_image_btn" class="list-group-item flex-container flexGap5"><div class="fa-solid fa-feather"></div><span>Ikarus Auto Image</span></div>`);
         $('#ikarus_auto_image_btn').off('click').on('click', onMenuButtonClick);
         await createSettings(settingsHtml);
+        syncPromptInjection();
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
         console.log(`[${EXT}] Extension loaded`);
     })();
