@@ -54,6 +54,8 @@ const DEFAULT_SETTINGS = {
     // Double cleaner: strips duplicate tags after all processing
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
     autoClean: false,
+    autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
+    filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
 };
 
 // ==========================================================================
@@ -148,15 +150,18 @@ function ensureSettings() {
     if (!Array.isArray(es.repCategories)) es.repCategories = [];
     if (!es.folderCategories || typeof es.folderCategories !== 'object') es.folderCategories = {};
     if (!es.repFieldMode) es.repFieldMode = 'tags';
-    // Ensure each replacement has folder and caption fields
+    // Ensure each replacement has folder, caption, and shortTag fields
     for (const r of (es.replacements || [])) {
         if (r.folder === undefined) r.folder = '';
         if (r.caption === undefined) r.caption = r.replacement || '';
+        if (r.shortTag === undefined) r.shortTag = '';
     }
     if (!Array.isArray(es.filters)) es.filters = [];
     if (es.invertProcessingOrder === undefined) es.invertProcessingOrder = false;
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
     if (es.autoClean === undefined) es.autoClean = false;
+    if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
+    if (es.filterNativeSd === undefined) es.filterNativeSd = true;
 }
 
 function updateUI() {
@@ -168,9 +173,17 @@ function updateUI() {
         $('#ikarus_prompt_text').val(es.promptInjection.prompt);
         $('#ikarus_prompt_regex').val(es.promptInjection.regex);
         $('#ikarus_prompt_position').val(es.promptInjection.position);
+        const isAppend = es.promptInjection.position === 'append_user';
+        const isMacro = es.promptInjection.position === 'macro';
+        // Hide depth controls when append_user or macro is selected
+        $('#ikarus_prompt_position').closest('.ikarus-row').find('div:last-child').toggle(!isAppend && !isMacro);
+        $('#ikarus_append_user_hint').toggle(isAppend);
+        $('#ikarus_macro_hint').toggle(isMacro);
         $('#ikarus_prompt_depth').val(es.promptInjection.depth);
         $('#ikarus_invert_order').prop('checked', es.invertProcessingOrder);
         $('#ikarus_auto_clean').prop('checked', es.autoClean);
+        $('#ikarus_auto_fix_pic').prop('checked', es.autoFixPicFormat);
+        $('#ikarus_filter_native_sd').prop('checked', es.filterNativeSd);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
@@ -361,7 +374,8 @@ function renderRepCard(r, isChild) {
             <div><b class="trigger-label">Find:</b> ${esc(r.trigger)} <em>(${r.matchMode || 'OR'})</em></div>
             <div><b class="replace-label">🏷️</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? '…' : ''}</div>
             ${r.caption && r.caption !== r.replacement ? `<div><b class="replace-label">💬</b> ${esc((r.caption || '').substring(0, 100))}${(r.caption || '').length > 100 ? '…' : ''}</div>` : ''}
-            <div>Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? '👤' : '🌐'}</span>${r.folder ? ` | 📁 ${esc(r.folder)}` : ''} | ${s().repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
+            ${r.replaceMode === 'first_full' && r.shortTag ? `<div><b class="replace-label">🔁</b> ${esc((r.shortTag || '').substring(0, 80))}${(r.shortTag || '').length > 80 ? '…' : ''}</div>` : ''}
+            <div>Mode: ${r.replaceMode === 'all' ? 'All' : r.replaceMode === 'first_full' ? '1st Full' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? '👤' : '🌐'}</span>${r.folder ? ` | 📁 ${esc(r.folder)}` : ''} | ${s().repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
         </div>
     </div>`;
 }
@@ -371,6 +385,7 @@ function addReplacement(parentId) {
     const trigger = $('#ikarus_rep_trigger').val()?.trim();
     const replacement = $('#ikarus_rep_replacement').val()?.trim();
     const caption = $('#ikarus_rep_caption').val()?.trim() || replacement;
+    const shortTag = $('#ikarus_rep_short_tag').val()?.trim();
     const matchMode = $('#ikarus_rep_match').val() || 'OR';
     const replaceMode = $('#ikarus_rep_mode').val() || 'first';
     const priority = parseInt($('#ikarus_rep_priority').val()) || 0;
@@ -382,11 +397,12 @@ function addReplacement(parentId) {
         id: uid(), name: name || trigger, scope: currentRepScope,
         charId: currentRepScope === 'char' ? getCurrentCharId() : null,
         trigger, matchMode, replacement: replacement || caption, caption: caption || replacement,
+        shortTag: shortTag || '',
         replaceMode, priority,
         parentId: parentId || null, enabled: true,
     });
     saveSettingsDebounced(); renderReplacementList();
-    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption').val('');
+    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_short_tag').val('');
     $('#ikarus_rep_priority').val('0');
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
@@ -395,8 +411,11 @@ function editReplacement(id) {
     const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
     $('#ikarus_rep_name').val(r.name); $('#ikarus_rep_trigger').val(r.trigger);
     $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || '');
+    $('#ikarus_rep_short_tag').val(r.shortTag || '');
     $('#ikarus_rep_match').val(r.matchMode || 'OR');
     $('#ikarus_rep_mode').val(r.replaceMode || 'first'); $('#ikarus_rep_priority').val(r.priority || 0);
+    // Show/hide short tag row based on loaded mode
+    $('#ikarus_rep_short_tag_row').toggle(r.replaceMode === 'first_full');
     // Store parentId for re-adding
     $('#ikarus_rep_add').data('parent-id', r.parentId || '');
     const idx = es.replacements.findIndex(x => x.id === id);
@@ -689,6 +708,7 @@ function openGlobalManager() {
                 <label>Trigger</label><input class="text_pole mgr-ed-trigger" value="${esc(r.trigger || '')}" />
                 <label>Tags (🏷️)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
                 <label>Caption (💬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
+                <label>Dedupe tag (🔁)</label><input class="text_pole mgr-ed-short-tag" value="${esc(r.shortTag || '')}" placeholder="e.g. darkness \\(konosuba\\) — used for 2nd+ occurrences in 'First full' mode" />
                 <label>Match</label>
                 <select class="text_pole mgr-ed-match">
                     <option value="OR"${r.matchMode === 'OR' ? ' selected' : ''}>OR</option>
@@ -697,8 +717,9 @@ function openGlobalManager() {
                 </select>
                 <label>Replace Mode</label>
                 <select class="text_pole mgr-ed-mode">
-                    <option value="first"${r.replaceMode !== 'all' ? ' selected' : ''}>First</option>
+                    <option value="first"${r.replaceMode === 'first' ? ' selected' : ''}>First</option>
                     <option value="all"${r.replaceMode === 'all' ? ' selected' : ''}>All</option>
+                    <option value="first_full"${r.replaceMode === 'first_full' ? ' selected' : ''}>First full, rest dedupe</option>
                 </select>
                 <label>Priority</label><input class="text_pole mgr-ed-priority" type="number" value="${r.priority || 0}" />
             </div>
@@ -850,6 +871,7 @@ function openGlobalManager() {
         r.trigger = form.find('.mgr-ed-trigger').val()?.trim() || r.trigger;
         r.replacement = form.find('.mgr-ed-replacement').val()?.trim() || r.replacement;
         r.caption = form.find('.mgr-ed-caption').val()?.trim() || r.caption || r.replacement;
+        r.shortTag = form.find('.mgr-ed-short-tag').val()?.trim() || '';
         r.matchMode = form.find('.mgr-ed-match').val() || 'OR';
         r.replaceMode = form.find('.mgr-ed-mode').val() || 'first';
         r.priority = parseInt(form.find('.mgr-ed-priority').val()) || 0;
@@ -1052,8 +1074,16 @@ function doReplace(text, rule) {
     let result = text;
     for (const kw of keywords) {
         const escaped = escRegex(kw);
-        const flags = rule.replaceMode === 'all' ? 'gi' : 'i';
-        result = result.replace(new RegExp(`\\b${escaped}\\b`, flags), activeText.trim());
+        if (rule.replaceMode === 'first_full') {
+            // First occurrence → full replacement text
+            result = result.replace(new RegExp(`\\b${escaped}\\b`, 'i'), activeText.trim());
+            // Remaining occurrences → short dedupe tag (or just the keyword with disambiguation if no shortTag set)
+            const dedupeText = (rule.shortTag || kw).trim();
+            result = result.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), dedupeText);
+        } else {
+            const flags = rule.replaceMode === 'all' ? 'gi' : 'i';
+            result = result.replace(new RegExp(`\\b${escaped}\\b`, flags), activeText.trim());
+        }
     }
     return cleanPrompt(result);
 }
@@ -1191,6 +1221,38 @@ function processPrompt(prompt, negative) {
     return { prompt: p, negative: n };
 }
 
+// Prompts generated by this extension are processed before calling /sd. The
+// native SD event still fires, so remember them briefly to avoid double passes.
+const _processedSdPrompts = new Set();
+
+function markProcessedSdPrompt(prompt) {
+    const key = String(prompt || '');
+    if (!key) return;
+    _processedSdPrompts.add(key);
+    setTimeout(() => _processedSdPrompts.delete(key), 30000);
+}
+
+function handleGlobalSdPromptProcessing(eventData) {
+    try {
+        const es = s();
+        if (!es.filterNativeSd) return;
+        if (!eventData || typeof eventData.prompt !== 'string') return;
+
+        const originalPrompt = eventData.prompt;
+        if (_processedSdPrompts.delete(originalPrompt)) {
+            return;
+        }
+
+        const processed = processPrompt(originalPrompt, '');
+        if (processed.prompt !== originalPrompt) {
+            eventData.prompt = processed.prompt;
+            console.log(`[${EXT}] Global /sd prompt filtered before image generation`);
+        }
+    } catch (error) {
+        console.error(`[${EXT}] Global /sd prompt filter error:`, error);
+    }
+}
+
 // ==========================================================================
 // Auto-Cleaner (message tag cleanup)
 // ==========================================================================
@@ -1238,16 +1300,87 @@ function syncPromptInjection() {
     try {
         const es = s();
         const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
+        const isAppendUser = es.promptInjection?.position === 'append_user';
+        const isMacro = es.promptInjection?.position === 'macro';
         const { promptText, charPrompt } = enabled ? getPromptInjectionText() : { promptText: '', charPrompt: '' };
         const depth = Number(es.promptInjection?.depth || 0);
-        setExtensionPrompt(PROMPT_KEY, promptText, extension_prompt_types.IN_CHAT, depth, false, getExtensionPromptRole());
-        console.log(`[${EXT}] Native prompt ${enabled ? 'registered' : 'cleared'}: depth=${depth}, charPrompt=${charPrompt ? 'yes' : 'none'}`);
+
+        if (isMacro) {
+            // Clear native prompt — macro mode handles injection via {{IkarusAutoImage-prompt}} macro replacement
+            setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
+            console.log(`[${EXT}] Macro mode ${enabled ? 'active' : 'cleared'}: prompt will be injected via {{IkarusAutoImage-prompt}} macro`);
+        } else if (isAppendUser) {
+            // Clear native prompt — append_user mode handles injection via GENERATION_STARTED
+            setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
+            console.log(`[${EXT}] Append-to-user mode ${enabled ? 'active' : 'cleared'}: charPrompt=${charPrompt ? 'yes' : 'none'}`);
+        } else {
+            setExtensionPrompt(PROMPT_KEY, promptText, extension_prompt_types.IN_CHAT, depth, false, getExtensionPromptRole());
+            console.log(`[${EXT}] Native prompt ${enabled ? 'registered' : 'cleared'}: depth=${depth}, charPrompt=${charPrompt ? 'yes' : 'none'}`);
+        }
     } catch (error) { console.error(`[${EXT}] Native prompt sync error:`, error); }
 }
 
-eventSource.on(event_types.GENERATION_STARTED, syncPromptInjection);
+// --- Append-to-User-Message mode ---
+// Stores the original message text so we can restore after generation
+let _appendUserOriginal = null;
+let _appendUserMesIdx = -1;
+
+function appendPromptToLastUserMessage() {
+    const es = s();
+    if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
+    if (es.promptInjection?.position !== 'append_user') return;
+    if (!es.promptInjection?.enabled) return;
+
+    const { promptText } = getPromptInjectionText();
+    if (!promptText.trim()) return;
+
+    try {
+        const context = getContext();
+        // Find the last user message
+        for (let i = context.chat.length - 1; i >= 0; i--) {
+            if (context.chat[i].is_user) {
+                _appendUserMesIdx = i;
+                _appendUserOriginal = context.chat[i].mes;
+                // Append the prompt text after the user's message with a separator
+                context.chat[i].mes = `${_appendUserOriginal}\n\n${promptText}`;
+                console.log(`[${EXT}] Appended prompt to user message #${i}`);
+                return;
+            }
+        }
+    } catch (error) {
+        console.error(`[${EXT}] Append-to-user error:`, error);
+    }
+}
+
+function restoreOriginalUserMessage() {
+    if (_appendUserOriginal === null || _appendUserMesIdx < 0) return;
+    try {
+        const context = getContext();
+        if (context.chat[_appendUserMesIdx]?.is_user) {
+            context.chat[_appendUserMesIdx].mes = _appendUserOriginal;
+            console.log(`[${EXT}] Restored original user message #${_appendUserMesIdx}`);
+        }
+    } catch (error) {
+        console.error(`[${EXT}] Restore user message error:`, error);
+    } finally {
+        _appendUserOriginal = null;
+        _appendUserMesIdx = -1;
+    }
+}
+
+eventSource.on(event_types.GENERATION_STARTED, () => {
+    syncPromptInjection();
+    appendPromptToLastUserMessage();
+});
+eventSource.on(event_types.GENERATION_ENDED, restoreOriginalUserMessage);
+eventSource.on(event_types.GENERATION_STOPPED, restoreOriginalUserMessage);
 eventSource.on(event_types.CHAT_LOADED, syncPromptInjection);
 eventSource.on(event_types.APP_READY, syncPromptInjection);
+if (event_types.SD_PROMPT_PROCESSING) {
+    eventSource.on(event_types.SD_PROMPT_PROCESSING, handleGlobalSdPromptProcessing);
+} else {
+    console.warn(`[${EXT}] SD_PROMPT_PROCESSING event not available; native /sd prompts cannot be globally filtered on this SillyTavern build.`);
+}
 
 // ==========================================================================
 // Character change detection — auto-refresh when switching cards
@@ -1305,12 +1438,40 @@ function getImagePromptMatches(text, regexPattern) {
     return found;
 }
 
+/**
+ * Normalizes malformed pic prompt tags to the correct [pic prompt="..."] format.
+ * Catches: *pic prompt="..."*, (pic prompt="..."), {pic prompt="..."}, <pic prompt="...">,
+ *          and bare/unwrapped pic prompt="..." with no brackets at all.
+ */
+function normalizePicPrompts(text) {
+    // Step 1: Fix wrapped variants — *pic..*, (pic..), {pic..}, <pic..>
+    // This regex matches any opening wrapper char(s), then pic prompt="...", then closing wrapper char(s)
+    let result = text.replace(/(?:[*_~`]+\s*|[(\[{<]\s*)pic\s+prompt\s*=\s*"([^"]*?)"\s*(?:[*_~`]+|[)\]}>])/gi,
+        (_match, prompt) => `[pic prompt="${prompt}"]`
+    );
+    // Step 2: Catch completely bare/unwrapped: pic prompt="..." sitting alone (not already inside brackets)
+    result = result.replace(/(?<![[\w])pic\s+prompt\s*=\s*"([^"]*?)"(?![^\s\]]*\])/gi,
+        (_match, prompt) => `[pic prompt="${prompt}"]`
+    );
+    return result;
+}
+
 async function handleIncomingMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
     const context = getContext();
     const message = context.chat[context.chat.length - 1];
     if (!message || message.is_user || !es.promptInjection?.regex) return;
+
+    // Auto-fix malformed pic prompts before extraction
+    if (es.autoFixPicFormat) {
+        const fixed = normalizePicPrompts(message.mes);
+        if (fixed !== message.mes) {
+            console.log(`[${EXT}] Auto-fixed malformed pic prompt format(s) in message`);
+            message.mes = fixed;
+            updateMessageBlock(context.chat.length - 1, message);
+        }
+    }
 
     const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
     if (!matches.length) return;
@@ -1331,6 +1492,7 @@ async function handleIncomingMessage() {
                 // Run the full processing pipeline
                 const processed = processPrompt(imgPrompt, '');
                 imgPrompt = processed.prompt;
+                markProcessedSdPrompt(imgPrompt);
 
                 const result = await SlashCommandParser.commands['sd'].callback(
                     { quiet: es.insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
@@ -1384,7 +1546,17 @@ async function createSettings(html) {
     // Section 2: Presets
     $('#ikarus_prompt_text').on('input', function () { s().promptInjection.prompt = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_prompt_regex').on('input', function () { s().promptInjection.regex = $(this).val(); saveSettingsDebounced(); });
-    $('#ikarus_prompt_position').on('change', function () { s().promptInjection.position = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_prompt_position').on('change', function () {
+        s().promptInjection.position = $(this).val();
+        const isAppend = $(this).val() === 'append_user';
+        const isMacro = $(this).val() === 'macro';
+        // Hide depth controls when append_user or macro is selected (depth is irrelevant)
+        $(this).closest('.ikarus-row').find('div:last-child').toggle(!isAppend && !isMacro);
+        $('#ikarus_append_user_hint').toggle(isAppend);
+        $('#ikarus_macro_hint').toggle(isMacro);
+        syncPromptInjection();
+        saveSettingsDebounced();
+    });
     $('#ikarus_prompt_depth').on('input', function () { s().promptInjection.depth = parseInt($(this).val()) || 0; syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_preset_select').on('change', function () { loadPreset($(this).val()); });
     $('#ikarus_preset_save').on('click', savePreset);
@@ -1405,6 +1577,10 @@ async function createSettings(html) {
         _addChildParentId = null;
         $('#ikarus_rep_add').text('➕ Add Replacement');
     });
+    // Show/hide dedupe tag row based on mode selection
+    $('#ikarus_rep_mode').on('change', function () {
+        $('#ikarus_rep_short_tag_row').toggle($(this).val() === 'first_full');
+    });
 
     // Section 4: Filters
     $('#ikarus_flt_scope_global').on('click', function () { currentFltScope = 'global'; $(this).addClass('active'); $('#ikarus_flt_scope_char').removeClass('active'); renderFilterList(); });
@@ -1421,6 +1597,8 @@ async function createSettings(html) {
         toastr.info(`Replacement mode: ${$(this).val() === 'caption' ? '💬 Caption' : '🏷️ Tags'}`);
     });
     $('#ikarus_auto_clean').on('change', function () { s().autoClean = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_auto_fix_pic').on('change', function () { s().autoFixPicFormat = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_filter_native_sd').on('change', function () { s().filterNativeSd = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_dc_mode').on('change', function () {
         s().doubleCleaner.mode = $(this).val(); saveSettingsDebounced();
         $('#ikarus_dc_tags_row').toggle($(this).val() === 'listed');
@@ -1474,6 +1652,31 @@ $(function () {
     (async function () {
         ensureSettings();
         migrateCharKeys();
+
+        // Register the {{IkarusAutoImage-prompt}} macro for Macro Mode
+        try {
+            const context = SillyTavern.getContext();
+            if (context.macros && typeof context.macros.register === 'function') {
+                context.macros.register('IkarusAutoImage-prompt', () => {
+                    const es = s();
+                    const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
+                    const isMacro = es.promptInjection?.position === 'macro';
+                    if (!enabled || !isMacro) return ''; // Only resolve when macro mode is active
+                    const { promptText } = getPromptInjectionText();
+                    console.log(`[${EXT}] Macro {{IkarusAutoImage-prompt}} resolved (${promptText.length} chars)`);
+                    return promptText;
+                }, {
+                    description: 'Resolves to the fully assembled IkarusAutoImage prompt (including character-specific content). Only active when Macro Mode is selected as position.',
+                    category: 'IkarusAutoImage',
+                });
+                console.log(`[${EXT}] Registered {{IkarusAutoImage-prompt}} macro via context.macros.register()`);
+            } else {
+                console.warn(`[${EXT}] context.macros.register() not available — macro mode will not work. Update SillyTavern to a newer version.`);
+            }
+        } catch (error) {
+            console.warn(`[${EXT}] Could not register macro:`, error);
+        }
+
         const settingsHtml = await $.get(`${EXT_PATH}/settings.html`);
         $('#extensionsMenu').append(`<div id="ikarus_auto_image_btn" class="list-group-item flex-container flexGap5"><div class="fa-solid fa-feather"></div><span>Ikarus Auto Image</span></div>`);
         $('#ikarus_auto_image_btn').off('click').on('click', onMenuButtonClick);

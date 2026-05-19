@@ -51,7 +51,11 @@
                         <option value="deep_system">@D ⚙️ System</option>
                         <option value="deep_user">@D 👤 User</option>
                         <option value="deep_assistant">@D 🤖 AI</option>
+                        <option value="append_user">📎 Append to User Message</option>
+                        <option value="macro">🔗 Macro Mode</option>
                     </select>
+                    <div id="ikarus_append_user_hint" class="ikarus-hint" style="display:none;margin-top:4px;color:#e0a0ff;">Appends the prompt directly after your message — best for dumber models that lose track of system-level injections.</div>
+                    <div id="ikarus_macro_hint" class="ikarus-hint" style="display:none;margin-top:4px;color:#80e0ff;">Place <code>{{IkarusAutoImage-prompt}}</code> anywhere in your preset prompts (e.g. inside your CoT block). The macro will be replaced with the fully assembled Ikarus prompt including the character-specific content. When this mode is active, no depth injection occurs — only the macro replacement.</div>
                 </div>
                 <div>
                     <label for="ikarus_prompt_depth">Depth</label>
@@ -111,12 +115,18 @@
                         <select id="ikarus_rep_mode" class="text_pole">
                             <option value="first">First occurrence</option>
                             <option value="all">All occurrences</option>
+                            <option value="first_full">First full, rest dedupe</option>
                         </select>
                     </div>
                     <div>
                         <label>Priority</label>
                         <input id="ikarus_rep_priority" type="number" class="text_pole" value="0" min="0" max="100">
                     </div>
+                </div>
+                <div id="ikarus_rep_short_tag_row" style="display:none;">
+                    <label>Dedupe tag 🔁 <span style="font-weight:normal;opacity:0.6;">(used for 2nd+ occurrences)</span></label>
+                    <input id="ikarus_rep_short_tag" type="text" class="text_pole" placeholder="e.g. darkness \(konosuba\), she, or any custom text">
+                    <div class="ikarus-hint">First match gets the full Tags/Caption. Every remaining match gets this text instead.</div>
                 </div>
                 <button id="ikarus_rep_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add
                     Replacement</button>
@@ -192,6 +202,12 @@
             </label>
             <div class="ikarus-hint" style="margin-bottom:8px;">Default: Replacements → Filters → Double Cleaner</div>
 
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_filter_native_sd">
+                <span>Filter native /sd prompts from SillyTavern and other extensions</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">When enabled, Ikarus replacements, filters, and double-cleaning also run on any prompt sent through SillyTavern's native image generation. Turn this off to only process prompts extracted by this extension.</div>
+
             <div class="ikarus-row" style="align-items:center;gap:8px;margin-bottom:8px;">
                 <label style="margin:0;font-weight:600;">Replacement mode:</label>
                 <select id="ikarus_rep_field_mode" class="text_pole" style="max-width:150px;">
@@ -210,6 +226,17 @@
             </label>
             <div class="ikarus-hint" style="margin-bottom:8px;">Strips &lt;pic&gt; tags from the displayed message after
                 generation</div>
+
+            <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
+
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">🔧</span> Auto-Fix Pic Format</div>
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_auto_fix_pic">
+                <span>Auto-fix malformed pic prompts</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">When the AI writes <code>*pic prompt="..."*</code>,
+                <code>(pic prompt="...")</code>, or other wrong formats, automatically convert them to
+                <code>[pic prompt="..."]</code> before extraction.</div>
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 
