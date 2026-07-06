@@ -541,3 +541,12 @@
     padding: 4px 10px;
     font-size: 11px;
 }
+
+/* Separate mode options */
+.ikarus-separate-options {
+    margin-top: 4px;
+    padding: 6px 8px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 6px;
+    border: 1px solid rgba(128, 224, 255, 0.1);
+}

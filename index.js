@@ -14,6 +14,7 @@ import {
     setExtensionPrompt,
     extension_prompt_roles,
     extension_prompt_types,
+    generateRaw,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
@@ -56,6 +57,9 @@ const DEFAULT_SETTINGS = {
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
+    generationMode: 'together', // 'together' | 'separate'
+    separateProfile: '', // connection profile ID for separate mode (empty = current)
+    separateContextSize: 1, // 0 = all AI messages, N = last N AI messages
 };
 
 // ==========================================================================
@@ -162,6 +166,9 @@ function ensureSettings() {
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
+    if (!es.generationMode) es.generationMode = DEFAULT_SETTINGS.generationMode;
+    if (es.separateProfile === undefined) es.separateProfile = DEFAULT_SETTINGS.separateProfile;
+    if (es.separateContextSize === undefined) es.separateContextSize = DEFAULT_SETTINGS.separateContextSize;
 }
 
 function updateUI() {
@@ -187,6 +194,10 @@ function updateUI() {
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
+        $('#ikarus_generation_mode').val(es.generationMode || 'together');
+        $('.ikarus-separate-options').toggle(es.generationMode === 'separate');
+        $('#ikarus_separate_context_size').val(es.separateContextSize ?? 1);
+        populateProfileDropdown();
     }
     renderPresetDropdown();
     loadCharPrompt();
@@ -1300,12 +1311,16 @@ function syncPromptInjection() {
     try {
         const es = s();
         const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
+        const isSeparate = es.generationMode === 'separate';
         const isAppendUser = es.promptInjection?.position === 'append_user';
         const isMacro = es.promptInjection?.position === 'macro';
         const { promptText, charPrompt } = enabled ? getPromptInjectionText() : { promptText: '', charPrompt: '' };
         const depth = Number(es.promptInjection?.depth || 0);
 
-        if (isMacro) {
+        if (isSeparate) {
+            setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
+            console.log(`[${EXT}] Separate mode: prompt injection cleared (will use second API call)`);
+        } else if (isMacro) {
             // Clear native prompt — macro mode handles injection via {{IkarusAutoImage-prompt}} macro replacement
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
             console.log(`[${EXT}] Macro mode ${enabled ? 'active' : 'cleared'}: prompt will be injected via {{IkarusAutoImage-prompt}} macro`);
@@ -1328,6 +1343,7 @@ let _appendUserMesIdx = -1;
 function appendPromptToLastUserMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
+    if (es.generationMode === 'separate') return;
     if (es.promptInjection?.position !== 'append_user') return;
     if (!es.promptInjection?.enabled) return;
 
@@ -1456,9 +1472,167 @@ function normalizePicPrompts(text) {
     return result;
 }
 
+function populateProfileDropdown() {
+    const $select = $('#ikarus_separate_profile');
+    if (!$select.length) return;
+    const st = getContext();
+    $select.empty();
+    $select.append($('<option></option>').val('').text('Same as Current'));
+    try {
+        const cmEnabled = !st.extensionSettings?.disabledExtensions?.includes('connection-manager');
+        const profiles = cmEnabled && st.extensionSettings?.connectionManager?.profiles;
+        if (Array.isArray(profiles)) {
+            for (const p of profiles) {
+                $select.append($('<option></option>').val(p.id).text(p.name));
+            }
+        }
+    } catch (e) { console.warn(`[${EXT}] Could not load connection profiles:`, e); }
+    $select.val(s().separateProfile || '');
+}
+
+async function handleSeparateMode() {
+    const es = s();
+    if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
+    const context = getContext();
+    const message = context.chat[context.chat.length - 1];
+    if (!message || message.is_user || !es.promptInjection?.regex) return;
+
+    const mesIdx = context.chat.length - 1;
+    const { promptText } = getPromptInjectionText();
+    if (!promptText.trim()) {
+        console.warn(`[${EXT}] Separate mode: no prompt template configured, skipping`);
+        return;
+    }
+
+    const contextSize = Number(es.separateContextSize ?? 1);
+    const aiMessages = context.chat.filter(m => !m.is_user && m.mes);
+    const targetMessage = message.mes;
+
+    let userPrompt;
+    if (contextSize === 1) {
+        userPrompt = `Re-output the following roleplay message exactly as-is, but with [pic prompt="..."] image tags inserted at contextually appropriate places within the text. Do not modify, rephrase, or remove any of the original text. Only add image tags.\n\n${targetMessage}`;
+    } else {
+        const contextMessages = contextSize === 0
+            ? aiMessages.slice(0, -1)
+            : aiMessages.slice(-contextSize).slice(0, -1);
+        const contextBlock = contextMessages.map(m => m.mes).join('\n\n---\n\n');
+        userPrompt = `Below are recent roleplay messages for context, followed by the TARGET MESSAGE. Use the context to understand the scene, but ONLY re-output the TARGET MESSAGE with [pic prompt="..."] image tags inserted at contextually appropriate places. Do not output the context messages. Do not modify, rephrase, or remove any of the target message's original text. Only add image tags.\n\n<context>\n${contextBlock}\n</context>\n\n<target_message>\n${targetMessage}\n</target_message>`;
+    }
+
+    const systemPrompt = promptText;
+
+    const messages = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+    ];
+
+    const profileId = es.separateProfile || '';
+
+    let waitToast = null;
+    try {
+        waitToast = toastr.info('Separate mode: waiting for image prompt API call...', 'Ikarus', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+
+        let result = '';
+        const st = context;
+        if (st.ConnectionManagerRequestService && st.ConnectionManagerRequestService.sendRequest) {
+            console.log(`[${EXT}] Separate mode: using ConnectionManagerRequestService (profile=${profileId || '<current>'})`);
+            const createGenerator = await st.ConnectionManagerRequestService.sendRequest(
+                profileId, messages, undefined, { stream: false },
+            );
+            if (typeof createGenerator === 'function') {
+                const generator = createGenerator();
+                for await (const chunk of generator) {
+                    if (chunk && chunk.text !== undefined) result = chunk.text;
+                }
+            } else if (createGenerator && typeof createGenerator === 'object') {
+                result = createGenerator.content || createGenerator.text || String(createGenerator);
+            }
+        } else {
+            console.log(`[${EXT}] Separate mode: ConnectionManagerRequestService unavailable, using generateRaw`);
+            const rawPrompt = `${systemPrompt}\n\n${userPrompt}`;
+            result = await generateRaw(rawPrompt, '', false, false);
+        }
+
+        if (!result || !result.trim()) {
+            console.warn(`[${EXT}] Separate mode: empty response from second API call`);
+            if (waitToast) toastr.clear(waitToast);
+            toastr.warning('Separate mode: received empty response');
+            return;
+        }
+
+        if (es.autoFixPicFormat) {
+            result = normalizePicPrompts(result);
+        }
+
+        message.mes = result;
+        updateMessageBlock(mesIdx, message);
+        await context.saveChat();
+
+        const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
+        if (!matches.length) {
+            console.log(`[${EXT}] Separate mode: no image prompts found in rewritten message`);
+            if (waitToast) toastr.clear(waitToast);
+            toastr.info('Separate mode: no image prompts were generated');
+            return;
+        }
+
+        toastr.info(`Generating ${matches.length} image(s)...`);
+        if (!message.extra) message.extra = {};
+        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+        if (message.extra.image && !message.extra.image_swipes.includes(message.extra.image)) message.extra.image_swipes.push(message.extra.image);
+
+        for (const match of matches) {
+            let imgPrompt = match.prompt;
+            if (!imgPrompt.trim()) continue;
+
+            const processed = processPrompt(imgPrompt, '');
+            imgPrompt = processed.prompt;
+            markProcessedSdPrompt(imgPrompt);
+
+            const sdResult = await SlashCommandParser.commands['sd'].callback(
+                { quiet: es.insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
+
+            if (es.insertType === INSERT_TYPE.INLINE && typeof sdResult === 'string' && sdResult.trim()) {
+                message.extra.image_swipes.push(sdResult); message.extra.image = sdResult;
+                message.extra.title = imgPrompt; message.extra.inline_image = true;
+                const messageElement = $(`.mes[mesid="${mesIdx}"]`);
+                appendMediaToMessage(message, messageElement); await context.saveChat();
+            } else if (es.insertType === INSERT_TYPE.REPLACE && typeof sdResult === 'string' && sdResult.trim()) {
+                const tag = match.full; if (!tag) continue;
+                message.mes = message.mes.replace(tag, `<img src="${esc(sdResult)}">`);
+                updateMessageBlock(mesIdx, message);
+                await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx); await context.saveChat();
+            }
+        }
+
+        if (es.autoClean) {
+            try {
+                const cleanPattern = es.promptInjection.regex.replace(/^\/|\/[gimsuy]*$/g, '');
+                if (cleanTagsFromMessage(message, cleanPattern)) {
+                    await context.saveChat();
+                    console.log(`[${EXT}] Auto-cleaned remaining tags from message`);
+                }
+            } catch (e) { console.error(`[${EXT}] Auto-clean error:`, e); }
+        }
+
+        if (waitToast) toastr.clear(waitToast);
+        toastr.success(`${matches.length} image(s) generated via separate mode`);
+    } catch (error) {
+        if (waitToast) toastr.clear(waitToast);
+        toastr.error(`Separate mode error: ${error}`);
+        console.error(`[${EXT}] Separate mode error:`, error);
+    }
+}
+
 async function handleIncomingMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
+
+    if (es.generationMode === 'separate') {
+        await handleSeparateMode();
+        return;
+    }
+
     const context = getContext();
     const message = context.chat[context.chat.length - 1];
     if (!message || message.is_user || !es.promptInjection?.regex) return;
@@ -1542,6 +1716,20 @@ async function createSettings(html) {
     // Section 1: Image Generation
     $('#ikarus_insert_type').on('change', function () { s().insertType = $(this).val(); updateUI(); syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_prompt_injection_enabled').on('change', function () { s().promptInjection.enabled = $(this).prop('checked'); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_generation_mode').on('change', function () {
+        s().generationMode = $(this).val();
+        $('.ikarus-separate-options').toggle($(this).val() === 'separate');
+        syncPromptInjection();
+        saveSettingsDebounced();
+    });
+    $('#ikarus_separate_profile').on('change', function () {
+        s().separateProfile = $(this).val();
+        saveSettingsDebounced();
+    });
+    $('#ikarus_separate_context_size').on('input', function () {
+        s().separateContextSize = parseInt($(this).val()) || 0;
+        saveSettingsDebounced();
+    });
 
     // Section 2: Presets
     $('#ikarus_prompt_text').on('input', function () { s().promptInjection.prompt = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
@@ -1661,7 +1849,7 @@ $(function () {
                     const es = s();
                     const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
                     const isMacro = es.promptInjection?.position === 'macro';
-                    if (!enabled || !isMacro) return ''; // Only resolve when macro mode is active
+                    if (!enabled || !isMacro || es.generationMode === 'separate') return '';
                     const { promptText } = getPromptInjectionText();
                     console.log(`[${EXT}] Macro {{IkarusAutoImage-prompt}} resolved (${promptText.length} chars)`);
                     return promptText;

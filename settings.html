@@ -22,6 +22,27 @@
                 <span>Enable Prompt Injection</span>
             </label>
             <div class="ikarus-hint">Injects a system prompt instructing the AI to produce image tags</div>
+            <div class="ikarus-row" style="margin-top:6px;">
+                <label for="ikarus_generation_mode">Generation Mode</label>
+                <select id="ikarus_generation_mode" class="text_pole widthNatural margin0">
+                    <option value="together">Together</option>
+                    <option value="separate">Separate (2 API calls)</option>
+                </select>
+            </div>
+            <div class="ikarus-separate-options" style="display:none;">
+                <div class="ikarus-row" style="margin-top:4px;">
+                    <label for="ikarus_separate_profile">Connection Profile</label>
+                    <select id="ikarus_separate_profile" class="text_pole widthNatural margin0">
+                        <option value="">Same as Current</option>
+                    </select>
+                </div>
+                <div class="ikarus-row" style="margin-top:4px;">
+                    <label for="ikarus_separate_context_size">Context Messages</label>
+                    <input id="ikarus_separate_context_size" class="text_pole widthUnset" type="number" min="0" max="999" value="1">
+                </div>
+                <div class="ikarus-hint" style="margin-top:2px;">How many past AI messages to include in the second API call. 0 = all AI messages, 1 = only the last AI message, 2+ = last N AI messages (user messages are skipped when counting).</div>
+                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call reads the message and re-outputs it with [pic prompt="..."] tags inserted. You can use a different, cheaper model for the second call.</div>
+            </div>
         </div>
 
         <!-- ===== Section 2: Prompt Presets ===== -->
