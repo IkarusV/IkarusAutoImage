@@ -1624,6 +1624,207 @@ async function handleSeparateMode() {
     }
 }
 
+// ==========================================================================
+// Manual Rescan — trigger image processing on last N AI messages on demand
+// ==========================================================================
+async function handleManualRescan() {
+    const es = s();
+    const insertType = es?.insertType;
+    if (!insertType || insertType === INSERT_TYPE.DISABLED) {
+        toastr.warning('Enable an Insert Mode first (Inline, Replace, or New Message)');
+        return;
+    }
+
+    const count = parseInt($('#ikarus_manual_rescan_count').val()) || 1;
+    const context = getContext();
+    const isSeparateMode = es.generationMode === 'separate';
+
+    // Collect last N AI messages from chat
+    const aiMessages = [];
+    for (let i = context.chat.length - 1; i >= 0 && aiMessages.length < count; i--) {
+        if (!context.chat[i].is_user && context.chat[i].mes) {
+            aiMessages.push({ index: i, message: context.chat[i] });
+        }
+    }
+
+    if (!aiMessages.length) {
+        toastr.warning('No AI messages found to rescan');
+        return;
+    }
+
+    // Process in chronological order (oldest first)
+    aiMessages.reverse();
+
+    let waitToast = null;
+    const generationsQueue = [];
+
+    try {
+        waitToast = toastr.info(
+            `Manual rescan: processing text for ${aiMessages.length} message(s) in ${isSeparateMode ? 'Separate' : 'Together'} mode...`,
+            'Ikarus', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false }
+        );
+
+        // --- Pass 1: Text processing & Tag injection ---
+        for (const { index: mesIdx, message } of aiMessages) {
+            if (isSeparateMode) {
+                // Separate mode API call to rewrite message with injected [pic] tags
+                const { promptText } = getPromptInjectionText();
+                if (!promptText.trim()) {
+                    console.warn(`[${EXT}] Manual rescan: no prompt template configured, skipping message #${mesIdx}`);
+                    continue;
+                }
+
+                const contextSize = Number(es.separateContextSize ?? 1);
+                const allAiMsgs = context.chat.filter(m => !m.is_user && m.mes);
+                const targetMessage = message.mes;
+
+                let userPrompt;
+                if (contextSize === 1) {
+                    userPrompt = `Re-output the following roleplay message exactly as-is, but with [pic prompt="..."] image tags inserted at contextually appropriate places within the text. Do not modify, rephrase, or remove any of the original text. Only add image tags.\n\n${targetMessage}`;
+                } else {
+                    const currentMsgIdx = allAiMsgs.indexOf(message);
+                    const contextMessages = contextSize === 0
+                        ? allAiMsgs.filter((_, i) => i < currentMsgIdx)
+                        : allAiMsgs.filter((_, i) => i < currentMsgIdx).slice(-contextSize + 1);
+                    const contextBlock = contextMessages.map(m => m.mes).join('\n\n---\n\n');
+                    userPrompt = `Below are recent roleplay messages for context, followed by the TARGET MESSAGE. Use the context to understand the scene, but ONLY re-output the TARGET MESSAGE with [pic prompt="..."] image tags inserted at contextually appropriate places. Do not output the context messages. Do not modify, rephrase, or remove any of the target message's original text. Only add image tags.\n\n<context>\n${contextBlock}\n</context>\n\n<target_message>\n${targetMessage}\n</target_message>`;
+                }
+
+                const systemPrompt = promptText;
+                const messages = [
+                    { role: 'system', content: systemPrompt },
+                    { role: 'user', content: userPrompt },
+                ];
+
+                const profileId = es.separateProfile || '';
+                let result = '';
+                const st = context;
+
+                if (st.ConnectionManagerRequestService && st.ConnectionManagerRequestService.sendRequest) {
+                    console.log(`[${EXT}] Manual rescan (separate): using ConnectionManagerRequestService (profile=${profileId || '<current>'})`);
+                    const createGenerator = await st.ConnectionManagerRequestService.sendRequest(
+                        profileId, messages, undefined, { stream: false },
+                    );
+                    if (typeof createGenerator === 'function') {
+                        const generator = createGenerator();
+                        for await (const chunk of generator) {
+                            if (chunk && chunk.text !== undefined) result = chunk.text;
+                        }
+                    } else if (createGenerator && typeof createGenerator === 'object') {
+                        result = createGenerator.content || createGenerator.text || String(createGenerator);
+                    }
+                } else {
+                    console.log(`[${EXT}] Manual rescan (separate): using generateRaw`);
+                    const rawPrompt = `${systemPrompt}\n\n${userPrompt}`;
+                    result = await generateRaw(rawPrompt, '', false, false);
+                }
+
+                if (!result || !result.trim()) {
+                    console.warn(`[${EXT}] Manual rescan: empty response for message #${mesIdx}`);
+                    continue;
+                }
+
+                if (es.autoFixPicFormat) {
+                    result = normalizePicPrompts(result);
+                }
+
+                message.mes = result;
+                updateMessageBlock(mesIdx, message);
+                await context.saveChat();
+            } else {
+                // Together mode: auto-fix if enabled
+                if (es.autoFixPicFormat) {
+                    const fixed = normalizePicPrompts(message.mes);
+                    if (fixed !== message.mes) {
+                        message.mes = fixed;
+                        updateMessageBlock(mesIdx, message);
+                        await context.saveChat();
+                    }
+                }
+            }
+
+            // Extract matches to process in Pass 2
+            const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
+            if (matches.length > 0) {
+                generationsQueue.push({ mesIdx, message, matches });
+            }
+        }
+
+        // --- Text rewrite completed: clear waitToast immediately ---
+        if (waitToast) {
+            toastr.clear(waitToast);
+            waitToast = null;
+        }
+
+        if (generationsQueue.length === 0) {
+            toastr.info('Manual rescan complete: no image prompts found.');
+            return;
+        }
+
+        // --- Pass 2: Image generation pass ---
+        let totalImages = 0;
+        for (const { mesIdx, message, matches } of generationsQueue) {
+            if (!message.extra) message.extra = {};
+            if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+            if (message.extra.image && !message.extra.image_swipes.includes(message.extra.image)) {
+                message.extra.image_swipes.push(message.extra.image);
+            }
+
+            for (const match of matches) {
+                let imgPrompt = match.prompt;
+                if (!imgPrompt.trim()) continue;
+
+                const processed = processPrompt(imgPrompt, '');
+                imgPrompt = processed.prompt;
+                markProcessedSdPrompt(imgPrompt);
+
+                const sdResult = await SlashCommandParser.commands['sd'].callback(
+                    { quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
+
+                if (insertType === INSERT_TYPE.INLINE && typeof sdResult === 'string' && sdResult.trim()) {
+                    message.extra.image_swipes.push(sdResult);
+                    message.extra.image = sdResult;
+                    message.extra.title = imgPrompt;
+                    message.extra.inline_image = true;
+                    const messageElement = $(`.mes[mesid="${mesIdx}"]`);
+                    appendMediaToMessage(message, messageElement);
+                    await context.saveChat();
+                } else if (insertType === INSERT_TYPE.REPLACE && typeof sdResult === 'string' && sdResult.trim()) {
+                    const tag = match.full;
+                    if (!tag) continue;
+                    message.mes = message.mes.replace(tag, `<img src="${esc(sdResult)}">`);
+                    updateMessageBlock(mesIdx, message);
+                    await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
+                    await context.saveChat();
+                }
+                totalImages++;
+            }
+
+            // Auto-clean if enabled
+            if (es.autoClean) {
+                try {
+                    const cleanPattern = es.promptInjection.regex.replace(/^\/|\/[gimsuy]*$/g, '');
+                    if (cleanTagsFromMessage(message, cleanPattern)) {
+                        await context.saveChat();
+                        console.log(`[${EXT}] Manual rescan: auto-cleaned message #${mesIdx}`);
+                    }
+                } catch (e) { console.error(`[${EXT}] Manual rescan auto-clean error:`, e); }
+            }
+        }
+
+        if (totalImages > 0) {
+            toastr.success(`Manual rescan complete: ${totalImages} image(s) generated.`);
+        } else {
+            toastr.info('Manual rescan complete: no images were generated.');
+        }
+
+    } catch (error) {
+        if (waitToast) toastr.clear(waitToast);
+        toastr.error(`Manual rescan error: ${error}`);
+        console.error(`[${EXT}] Manual rescan error:`, error);
+    }
+}
+
 async function handleIncomingMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
@@ -1730,6 +1931,7 @@ async function createSettings(html) {
         s().separateContextSize = parseInt($(this).val()) || 0;
         saveSettingsDebounced();
     });
+    $('#ikarus_manual_rescan').on('click', handleManualRescan);
 
     // Section 2: Presets
     $('#ikarus_prompt_text').on('input', function () { s().promptInjection.prompt = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
