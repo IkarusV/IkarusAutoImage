@@ -43,6 +43,7 @@ const DEFAULT_SETTINGS = {
     activePresetId: '', // currently selected preset ID
     // Per-character prompt: keyed by charId → string
     charPrompts: {},
+    charPrefixes: {},
     // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, caption, replaceMode, priority, parentId, enabled, folder}
     replacements: [],
     repFieldMode: 'tags', // 'tags' or 'caption' — which field to use during replacement
@@ -115,6 +116,17 @@ function migrateCharKeys() {
             }
         }
 
+        // Migrate charPrefixes
+        if (es.charPrefixes) {
+            for (const [oldKey, newKey] of Object.entries(keyMap)) {
+                if (es.charPrefixes[oldKey] && !es.charPrefixes[newKey]) {
+                    es.charPrefixes[newKey] = es.charPrefixes[oldKey];
+                    delete es.charPrefixes[oldKey];
+                    migrated++;
+                }
+            }
+        }
+
         // Migrate replacements
         if (es.replacements) {
             for (const r of es.replacements) {
@@ -149,6 +161,7 @@ function ensureSettings() {
     if (!Array.isArray(es.presets)) es.presets = [];
     if (es.activePresetId === undefined) es.activePresetId = '';
     if (!es.charPrompts || typeof es.charPrompts !== 'object') es.charPrompts = {};
+    if (!es.charPrefixes || typeof es.charPrefixes !== 'object') es.charPrefixes = {};
     if (!Array.isArray(es.replacements)) es.replacements = [];
     if (!Array.isArray(es.repFolders)) es.repFolders = [];
     if (!Array.isArray(es.repCategories)) es.repCategories = [];
@@ -201,6 +214,7 @@ function updateUI() {
     }
     renderPresetDropdown();
     loadCharPrompt();
+    loadCharPrefix();
     renderReplacementList();
     renderFilterList();
 }
@@ -319,6 +333,33 @@ function getCharPromptText() {
     const data = getCharPromptData(charId);
     if (!data) return '';
     return data.slots[data.active || 0] || '';
+}
+
+function getCharPrefix() {
+    const charId = getCurrentCharId();
+    if (!charId) return '';
+    return s().charPrefixes[charId] || '';
+}
+
+function loadCharPrefix() {
+    const $textarea = $('#ikarus_char_prefix');
+    if (!$textarea.length) return;
+    const charId = getCurrentCharId();
+    if (!charId) {
+        $textarea.val('').attr('placeholder', 'Select a character first...');
+        $('#ikarus_char_prefix_label').text('Char Prefix (no character)');
+        return;
+    }
+    const charName = getCurrentCharName();
+    $textarea.val(s().charPrefixes[charId] || '').attr('placeholder', `Prefix for ${charName}... (e.g. <lora:naruto:0.8>)`);
+    $('#ikarus_char_prefix_label').text(`Char Prefix — ${charName}`);
+}
+
+function saveCharPrefix() {
+    const charId = getCurrentCharId();
+    if (!charId) return;
+    s().charPrefixes[charId] = $('#ikarus_char_prefix').val() || '';
+    saveSettingsDebounced();
 }
 
 // ==========================================================================
@@ -1215,6 +1256,11 @@ function processPrompt(prompt, negative) {
     let p = String(prompt || '');
     let n = String(negative || '');
 
+    const prefix = getCharPrefix();
+    if (prefix) {
+        p = joinPrompt(prefix, p);
+    }
+
     if (es.invertProcessingOrder) {
         // Filters first
         const fResult = applyFiltersToPrompt(p, n); p = fResult.prompt; n = fResult.negative;
@@ -1339,6 +1385,7 @@ function syncPromptInjection() {
 // Stores the original message text so we can restore after generation
 let _appendUserOriginal = null;
 let _appendUserMesIdx = -1;
+let _isAwaitingNewMessage = false;
 
 function appendPromptToLastUserMessage() {
     const es = s();
@@ -1385,11 +1432,12 @@ function restoreOriginalUserMessage() {
 }
 
 eventSource.on(event_types.GENERATION_STARTED, () => {
+    _isAwaitingNewMessage = true;
     syncPromptInjection();
     appendPromptToLastUserMessage();
 });
-eventSource.on(event_types.GENERATION_ENDED, restoreOriginalUserMessage);
-eventSource.on(event_types.GENERATION_STOPPED, restoreOriginalUserMessage);
+eventSource.on(event_types.GENERATION_ENDED, () => { restoreOriginalUserMessage(); });
+eventSource.on(event_types.GENERATION_STOPPED, () => { _isAwaitingNewMessage = false; restoreOriginalUserMessage(); });
 eventSource.on(event_types.CHAT_LOADED, syncPromptInjection);
 eventSource.on(event_types.APP_READY, syncPromptInjection);
 if (event_types.SD_PROMPT_PROCESSING) {
@@ -1402,9 +1450,11 @@ if (event_types.SD_PROMPT_PROCESSING) {
 // Character change detection — auto-refresh when switching cards
 // ==========================================================================
 eventSource.on(event_types.CHAT_CHANGED, function () {
+    _isAwaitingNewMessage = false;
     console.log(`[${EXT}] Chat changed — refreshing character-specific UI`);
     migrateCharKeys();
     loadCharPrompt();
+    loadCharPrefix();
     syncPromptInjection();
     // Auto-switch to character scope and update tab UI
     const charId = getCurrentCharId();
@@ -1625,6 +1675,9 @@ async function handleSeparateMode() {
 }
 
 async function handleIncomingMessage() {
+    if (!_isAwaitingNewMessage) return;
+    _isAwaitingNewMessage = false;
+
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
 
@@ -1755,6 +1808,9 @@ async function createSettings(html) {
     $(document).on('click', '.ikarus-slot-btn', function () {
         switchCharSlot(parseInt($(this).data('slot')) || 0);
     });
+
+    // Character Prefix (per-card)
+    $('#ikarus_char_prefix').on('input', function () { saveCharPrefix(); });
 
     // Section 3: Replacements
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
