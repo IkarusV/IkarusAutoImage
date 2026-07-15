@@ -61,6 +61,7 @@ const DEFAULT_SETTINGS = {
     generationMode: 'together', // 'together' | 'separate'
     separateProfile: '', // connection profile ID for separate mode (empty = current)
     separateContextSize: 1, // 0 = all AI messages, N = last N AI messages
+    separateEnabled: true, // whether separate mode second API call is active
 };
 
 // ==========================================================================
@@ -182,6 +183,7 @@ function ensureSettings() {
     if (!es.generationMode) es.generationMode = DEFAULT_SETTINGS.generationMode;
     if (es.separateProfile === undefined) es.separateProfile = DEFAULT_SETTINGS.separateProfile;
     if (es.separateContextSize === undefined) es.separateContextSize = DEFAULT_SETTINGS.separateContextSize;
+    if (es.separateEnabled === undefined) es.separateEnabled = DEFAULT_SETTINGS.separateEnabled;
 }
 
 function updateUI() {
@@ -209,6 +211,7 @@ function updateUI() {
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
         $('#ikarus_generation_mode').val(es.generationMode || 'together');
         $('.ikarus-separate-options').toggle(es.generationMode === 'separate');
+        $('#ikarus_separate_enabled').prop('checked', es.separateEnabled !== false);
         $('#ikarus_separate_context_size').val(es.separateContextSize ?? 1);
         populateProfileDropdown();
     }
@@ -1883,6 +1886,7 @@ async function handleIncomingMessage() {
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
 
     if (es.generationMode === 'separate') {
+        if (!es.separateEnabled) return;
         await handleSeparateMode();
         return;
     }
@@ -1978,6 +1982,10 @@ async function createSettings(html) {
     });
     $('#ikarus_separate_profile').on('change', function () {
         s().separateProfile = $(this).val();
+        saveSettingsDebounced();
+    });
+    $('#ikarus_separate_enabled').on('change', function () {
+        s().separateEnabled = $(this).prop('checked');
         saveSettingsDebounced();
     });
     $('#ikarus_separate_context_size').on('input', function () {
