@@ -1,0 +1,9 @@
+﻿*.bak
+*.tmp
+*.ftfytest
+apply_*.py
+patch_*.py
+rework_*.py
+safe_*.py
+Kulx*.json
+__pycache__/

@@ -1,13 +1,13 @@
 <div class="inline-drawer">
     <div class="inline-drawer-toggle inline-drawer-header">
-        <b>🦅 Ikarus Auto Image</b>
+        <b>Ikarus Auto Image</b>
         <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
     </div>
     <div class="inline-drawer-content">
 
         <!-- ===== Section 1: Image Generation ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title"><span class="icon">🖼️</span> Image Generation</div>
+            <div class="ikarus-section-title"><span class="icon"></span> Image Generation</div>
             <div class="ikarus-row">
                 <label for="ikarus_insert_type">Insert Mode</label>
                 <select id="ikarus_insert_type" class="text_pole widthNatural margin0">
@@ -27,6 +27,7 @@
                 <select id="ikarus_generation_mode" class="text_pole widthNatural margin0">
                     <option value="together">Together</option>
                     <option value="separate">Separate (2 API calls)</option>
+                    <option value="standalone">Standalone Gallery</option>
                 </select>
             </div>
             <div class="ikarus-separate-options" style="display:none;">
@@ -48,10 +49,20 @@
                 <div class="ikarus-hint" style="margin-top:2px;">How many past AI messages to include in the second API call. 0 = all AI messages, 1 = only the last AI message, 2+ = last N AI messages (user messages are skipped when counting).</div>
                 <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call reads the message and re-outputs it with [pic prompt="..."] tags inserted. You can use a different, cheaper model for the second call.</div>
             </div>
+            <div class="ikarus-standalone-options" style="display:none;">
+                <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>
+                <div class="ikarus-row"><label>Context messages</label><input id="ikarus_standalone_context" type="number" min="1" max="999" value="5" class="text_pole widthUnset"><label>Images per request</label><input id="ikarus_standalone_count" type="number" min="1" max="30" value="3" class="text_pole widthUnset"></div>
+                <div class="ikarus-row"><label for="ikarus_standalone_profile">Standalone AI connection profile</label><select id="ikarus_standalone_profile" class="text_pole"><option value="">Same as Current</option></select></div>
+                <div class="ikarus-hint">This model creates image prompts. It is separate from the image generator selected by SillyTavern's /sd command.</div>
+                <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_hide_bubble"><span>Hide standalone bubble</span></label>
+                <label>Additional standalone system prompt</label><textarea id="ikarus_standalone_system" class="text_pole textarea_compact" rows="3" placeholder="Optional art direction and image sequencing rules"></textarea>
+                <button id="ikarus_standalone_open" class="menu_button" style="width:100%">Open Standalone Image Studio</button>
+                <div class="ikarus-hint">Does not rewrite roleplay, inject tags into roleplay, or attach images to messages. Gallery data is isolated per chat.</div>
+            </div>
 
             <!-- Manual Rescan (visible in both modes) -->
             <div class="ikarus-section" style="margin-top:8px;border:1px solid rgba(255,100,100,0.2);border-radius:6px;padding:8px;">
-                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon">🔄</span> Manual Rescan</div>
+                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon"></span> Manual Rescan</div>
                 <div class="ikarus-row" style="margin-bottom:4px;">
                     <label for="ikarus_manual_rescan_count">Messages to Rescan</label>
                     <input id="ikarus_manual_rescan_count" class="text_pole widthUnset" type="number" min="1" max="50" value="1">
@@ -65,7 +76,7 @@
 
         <!-- ===== Section 2: Prompt Presets ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title"><span class="icon">📋</span> Prompt Presets</div>
+            <div class="ikarus-section-title"><span class="icon"></span> Prompt Presets</div>
             <div class="ikarus-preset-row">
                 <select id="ikarus_preset_select" class="text_pole">
                     <option value="">-- Default --</option>
@@ -107,7 +118,7 @@
 
         <!-- ===== Character Prompt (per card) ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title" id="ikarus_char_prompt_label"><span class="icon">📝</span> Character Prompt</div>
+            <div class="ikarus-section-title" id="ikarus_char_prompt_label"><span class="icon"></span> Character Prompt</div>
             <div class="ikarus-hint" style="margin-bottom:6px;">5 slots per character card. Only the active slot is injected via <code>{CharacterPersonalised-prompt}</code> macro. Dot = slot has content.</div>
             <div id="ikarus_char_slots" class="ikarus-slot-row"></div>
             <textarea id="ikarus_char_prompt" class="text_pole textarea_compact" rows="5" placeholder="Select a character first..."></textarea>
@@ -115,27 +126,28 @@
 
         <!-- ===== Char Prefix (per card) ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title" id="ikarus_char_prefix_label"><span class="icon">🏷️</span> Char Prefix</div>
+            <div class="ikarus-section-title" id="ikarus_char_prefix_label"><span class="icon"></span> Char Prefix</div>
             <div class="ikarus-hint" style="margin-bottom:6px;">Prepended to every image prompt for this character (e.g. LoRAs, quality tags). Applies to this extension's pic prompts, and to all /sd prompts when "Filter native /sd" is enabled.</div>
             <textarea id="ikarus_char_prefix" class="text_pole textarea_compact" rows="2" placeholder="Select a character first..."></textarea>
         </div>
 
         <!-- ===== Section 3: Replacements ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title"><span class="icon">🔄</span> Replacements</div>
+            <div class="ikarus-section-title"><span class="icon"></span> Replacements</div>
             <div class="ikarus-hint" style="margin-bottom:6px;">Find trigger words and swap them in-place. Supports
                 children (more specific variants that auto-win over parent). Click 👶 on a card to add a child.</div>
 
             <div class="ikarus-scope-tabs">
-                <button id="ikarus_rep_scope_global" class="active">🌐 Global</button>
-                <button id="ikarus_rep_scope_char">👤 This Character</button>
-                <button id="ikarus_rep_manage" class="ikarus-manage-btn" title="Organize global replacements into folders">📂 Manage</button>
+                <button id="ikarus_rep_scope_global" class="active">Global</button>
+                <button id="ikarus_rep_scope_char">This Character</button>
+                <button id="ikarus_rep_manage" class="ikarus-manage-btn" title="Organize global replacements into folders">Manage</button>
+                <button id="ikarus_library_manage" class="ikarus-manage-btn" title="Save and reuse character rule folders">Library</button>
             </div>
 
             <div id="ikarus_replacement_list" class="ikarus-card-list"></div>
 
             <div class="ikarus-add-form">
-                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon">➕</span>
+                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon"></span>
                     Add Replacement</div>
                 <label>Name</label>
                 <input id="ikarus_rep_name" type="text" class="text_pole" placeholder="e.g. Sakura Tags">
@@ -147,6 +159,9 @@
                 <label>Caption 💬 (natural language replacement)</label>
                 <textarea id="ikarus_rep_caption" class="text_pole textarea_compact" rows="2"
                     placeholder="Same as tags, or a descriptive sentence (optional)"></textarea>
+                <label>Krea 2 (K2 replacement)</label>
+                <textarea id="ikarus_rep_krea2" class="text_pole textarea_compact" rows="2"
+                    placeholder="Krea 2-specific prompt text (optional; falls back to Caption/Tags)"></textarea>
                 <div class="ikarus-row">
                     <div>
                         <label>Match</label>
@@ -172,7 +187,7 @@
                 <div id="ikarus_rep_short_tag_row" style="display:none;">
                     <label>Dedupe tag 🔁 <span style="font-weight:normal;opacity:0.6;">(used for 2nd+ occurrences)</span></label>
                     <input id="ikarus_rep_short_tag" type="text" class="text_pole" placeholder="e.g. darkness \(konosuba\), she, or any custom text">
-                    <div class="ikarus-hint">First match gets the full Tags/Caption. Every remaining match gets this text instead.</div>
+                    <div class="ikarus-hint">First match gets the full selected replacement text. Every remaining match gets this text instead.</div>
                 </div>
                 <button id="ikarus_rep_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add
                     Replacement</button>
@@ -181,19 +196,19 @@
 
         <!-- ===== Section 4: Filters ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title"><span class="icon">🚫</span> Filters</div>
+            <div class="ikarus-section-title"><span class="icon"></span> Filters</div>
             <div class="ikarus-hint" style="margin-bottom:6px;">Trigger-based actions: remove words, append tags, or
                 replace text when trigger keywords are detected.</div>
 
             <div class="ikarus-scope-tabs">
-                <button id="ikarus_flt_scope_global" class="active">🌐 Global</button>
-                <button id="ikarus_flt_scope_char">👤 This Character</button>
+                <button id="ikarus_flt_scope_global" class="active">Global</button>
+                <button id="ikarus_flt_scope_char">This Character</button>
             </div>
 
             <div id="ikarus_filter_list" class="ikarus-card-list"></div>
 
             <div class="ikarus-add-form">
-                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon">➕</span>
+                <div class="ikarus-section-title" style="font-size:11px;margin-bottom:4px;"><span class="icon"></span>
                     Add Filter</div>
                 <label>Name</label>
                 <input id="ikarus_flt_name" type="text" class="text_pole" placeholder="e.g. Beach Night Mood">
@@ -234,13 +249,19 @@
                     <textarea id="ikarus_flt_action_text" class="text_pole textarea_compact" rows="2"
                         placeholder="e.g. bad anatomy, extra fingers"></textarea>
                 </div>
-                <button id="ikarus_flt_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add Filter</button>
+                <button id="ikarus_flt_add" class="menu_button" style="width:100%;margin-top:4px;">Add Filter</button>
             </div>
         </div>
 
         <!-- ===== Section 5: Processing & Cleaners ===== -->
         <div class="ikarus-section">
-            <div class="ikarus-section-title"><span class="icon">⚙️</span> Processing & Cleaners</div>
+            <div class="ikarus-section-title"><span class="icon"></span> Processing & Cleaners</div>
+
+            <label class="ikarus-toggle ikarus-master-toggle">
+                <input type="checkbox" id="ikarus_replacements_enabled">
+                <span>Enable replacements</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Master switch for all global and character replacements. Turning it off keeps every rule and its individual enabled/disabled state.</div>
 
             <label class="ikarus-toggle">
                 <input type="checkbox" id="ikarus_invert_order">
@@ -259,13 +280,14 @@
                 <select id="ikarus_rep_field_mode" class="text_pole" style="max-width:150px;">
                     <option value="tags">🏷️ Tags (danbooru)</option>
                     <option value="caption">💬 Caption (sentence)</option>
+                    <option value="krea2">K2 Krea 2</option>
                 </select>
             </div>
-            <div class="ikarus-hint" style="margin-bottom:8px;">Selects which field is used when replacements fire: Tags or Caption.</div>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Selects which field is used when replacements fire: Tags, Caption, or Krea 2.</div>
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 
-            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">🧹</span> Auto-Cleaner</div>
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon"></span> Auto-Cleaner</div>
             <label class="ikarus-toggle">
                 <input type="checkbox" id="ikarus_auto_clean">
                 <span>Auto-clean image tags from messages</span>
@@ -275,7 +297,7 @@
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 
-            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">🔧</span> Auto-Fix Pic Format</div>
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon"></span> Auto-Fix Pic Format</div>
             <label class="ikarus-toggle">
                 <input type="checkbox" id="ikarus_auto_fix_pic">
                 <span>Auto-fix malformed pic prompts</span>
@@ -286,7 +308,7 @@
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 
-            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon">✂️</span> Double Cleaner</div>
+            <div class="ikarus-section-title" style="font-size:11px;"><span class="icon"></span> Double Cleaner</div>
             <div class="ikarus-hint" style="margin-bottom:4px;">Runs after all replacements and filters. Strips
                 duplicate tags from the final prompt.</div>
             <div class="ikarus-row">

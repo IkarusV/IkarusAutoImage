@@ -52,13 +52,15 @@ const DEFAULT_SETTINGS = {
     folderCategories: {}, // mapping: folder name → category name
     // Filters: {id, name, scope, charId, trigger, matchMode, action, actionText, findText, target, enabled}
     filters: [],
+    replacementsEnabled: true, // master switch; preserves each rule's enabled state
     invertProcessingOrder: false, // false = replacements first, true = filters first
     // Double cleaner: strips duplicate tags after all processing
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
-    generationMode: 'together', // 'together' | 'separate'
+    generationMode: 'together', // 'together' | 'separate' | 'standalone'
+    standalone: { auto: false, contextSize: 5, imageCount: 3, profile: '', systemPrompt: '', libraries: {}, bubbleOpen: false, hideBubble: false },
     separateProfile: '', // connection profile ID for separate mode (empty = current)
     separateContextSize: 1, // 0 = all AI messages, N = last N AI messages
     separateEnabled: true, // whether separate mode second API call is active
@@ -167,14 +169,18 @@ function ensureSettings() {
     if (!Array.isArray(es.repFolders)) es.repFolders = [];
     if (!Array.isArray(es.repCategories)) es.repCategories = [];
     if (!es.folderCategories || typeof es.folderCategories !== 'object') es.folderCategories = {};
-    if (!es.repFieldMode) es.repFieldMode = 'tags';
-    // Ensure each replacement has folder, caption, and shortTag fields
+    if (!['tags', 'caption', 'krea2'].includes(es.repFieldMode)) es.repFieldMode = 'tags';
+    if (!es.characterLibrary || typeof es.characterLibrary !== 'object') es.characterLibrary = { folders: [] };
+    if (!Array.isArray(es.characterLibrary.folders)) es.characterLibrary.folders = [];
+    // Ensure each replacement has folder, caption, Krea 2, and shortTag fields
     for (const r of (es.replacements || [])) {
         if (r.folder === undefined) r.folder = '';
         if (r.caption === undefined) r.caption = r.replacement || '';
+        if (r.krea2 === undefined) r.krea2 = r.caption || r.replacement || '';
         if (r.shortTag === undefined) r.shortTag = '';
     }
     if (!Array.isArray(es.filters)) es.filters = [];
+    if (es.replacementsEnabled === undefined) es.replacementsEnabled = true;
     if (es.invertProcessingOrder === undefined) es.invertProcessingOrder = false;
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
     if (es.autoClean === undefined) es.autoClean = false;
@@ -184,6 +190,9 @@ function ensureSettings() {
     if (es.separateProfile === undefined) es.separateProfile = DEFAULT_SETTINGS.separateProfile;
     if (es.separateContextSize === undefined) es.separateContextSize = DEFAULT_SETTINGS.separateContextSize;
     if (es.separateEnabled === undefined) es.separateEnabled = DEFAULT_SETTINGS.separateEnabled;
+    if (!es.standalone || typeof es.standalone !== 'object') es.standalone = JSON.parse(JSON.stringify(DEFAULT_SETTINGS.standalone));
+    for (const [k,v] of Object.entries(DEFAULT_SETTINGS.standalone)) if (es.standalone[k] === undefined) es.standalone[k] = JSON.parse(JSON.stringify(v));
+    if (es.standalone.hideBubble === undefined) es.standalone.hideBubble = false;
 }
 
 function updateUI() {
@@ -202,6 +211,7 @@ function updateUI() {
         $('#ikarus_append_user_hint').toggle(isAppend);
         $('#ikarus_macro_hint').toggle(isMacro);
         $('#ikarus_prompt_depth').val(es.promptInjection.depth);
+        $('#ikarus_replacements_enabled').prop('checked', es.replacementsEnabled !== false);
         $('#ikarus_invert_order').prop('checked', es.invertProcessingOrder);
         $('#ikarus_auto_clean').prop('checked', es.autoClean);
         $('#ikarus_auto_fix_pic').prop('checked', es.autoFixPicFormat);
@@ -211,6 +221,12 @@ function updateUI() {
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
         $('#ikarus_generation_mode').val(es.generationMode || 'together');
         $('.ikarus-separate-options').toggle(es.generationMode === 'separate');
+        $('.ikarus-standalone-options').toggle(es.generationMode === 'standalone');
+        $('#ikarus_standalone_auto').prop('checked', !!es.standalone.auto);
+        $('#ikarus_standalone_context').val(es.standalone.contextSize);
+        $('#ikarus_standalone_count').val(es.standalone.imageCount);
+        $('#ikarus_standalone_profile').val(es.standalone.profile || '');
+        $('#ikarus_standalone_system').val(es.standalone.systemPrompt || '');
         $('#ikarus_separate_enabled').prop('checked', es.separateEnabled !== false);
         $('#ikarus_separate_context_size').val(es.separateContextSize ?? 1);
         populateProfileDropdown();
@@ -440,24 +456,25 @@ function addReplacement(parentId) {
     const trigger = $('#ikarus_rep_trigger').val()?.trim();
     const replacement = $('#ikarus_rep_replacement').val()?.trim();
     const caption = $('#ikarus_rep_caption').val()?.trim() || replacement;
+    const krea2 = $('#ikarus_rep_krea2').val()?.trim() || caption || replacement;
     const shortTag = $('#ikarus_rep_short_tag').val()?.trim();
     const matchMode = $('#ikarus_rep_match').val() || 'OR';
     const replaceMode = $('#ikarus_rep_mode').val() || 'first';
     const priority = parseInt($('#ikarus_rep_priority').val()) || 0;
 
     if (!trigger) { toastr.warning('Trigger is required'); return; }
-    if (!replacement && !caption) { toastr.warning('Tags or Caption text is required'); return; }
+    if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
 
     s().replacements.push({
         id: uid(), name: name || trigger, scope: currentRepScope,
         charId: currentRepScope === 'char' ? getCurrentCharId() : null,
-        trigger, matchMode, replacement: replacement || caption, caption: caption || replacement,
+        trigger, matchMode, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement,
         shortTag: shortTag || '',
         replaceMode, priority,
         parentId: parentId || null, enabled: true,
     });
     saveSettingsDebounced(); renderReplacementList();
-    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_short_tag').val('');
+    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
     $('#ikarus_rep_priority').val('0');
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
@@ -465,7 +482,7 @@ function addReplacement(parentId) {
 function editReplacement(id) {
     const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
     $('#ikarus_rep_name').val(r.name); $('#ikarus_rep_trigger').val(r.trigger);
-    $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || '');
+    $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || ''); $('#ikarus_rep_krea2').val(r.krea2 || '');
     $('#ikarus_rep_short_tag').val(r.shortTag || '');
     $('#ikarus_rep_match').val(r.matchMode || 'OR');
     $('#ikarus_rep_mode').val(r.replaceMode || 'first'); $('#ikarus_rep_priority').val(r.priority || 0);
@@ -505,7 +522,7 @@ function renderFilterList() {
             </div>
             <div class="card-details">
                 <div><b class="trigger-label">When:</b> ${esc(f.trigger)} <em>(${f.matchMode || 'OR'})</em></div>
-                <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? '✂ Remove:' : f.action === 'append' ? '＋ Append:' : '⇄ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
+                <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? '✂ Remove:' : f.action === 'append' ? '+ Append:' : '⇄ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
                 ${f.action === 'replace' ? `<div><b class="replace-label">→</b> ${esc((f.actionText || '').substring(0, 80))}</div>` : ''}
                 <div>Target: ${f.target || 'positive'} | <span class="scope-badge">${f.scope === 'char' ? '👤' : '🌐'}</span></div>
             </div>
@@ -633,8 +650,8 @@ function openGlobalManager() {
     <div id="ikarus_manager_overlay" class="ikarus-manager-overlay">
         <div class="ikarus-manager-popup">
             <div class="ikarus-manager-header">
-                <span>📂 Global Replacements Manager</span>
-                <button id="ikarus_manager_close" class="menu_button" title="Close">✕</button>
+                <span>&#128194; Global Replacements Manager</span>
+                <button id="ikarus_manager_close" class="menu_button" title="Close">&#10005;</button>
             </div>
             <div class="ikarus-manager-body">
                 <div class="ikarus-manager-sidebar">
@@ -642,16 +659,16 @@ function openGlobalManager() {
                     <div class="ikarus-manager-sidebar-bottom">
                         <div class="ikarus-manager-folder-add">
                             <input id="ikarus_folder_name" class="text_pole" placeholder="New folder..." />
-                            <button id="ikarus_folder_create" class="menu_button" title="Create folder">＋</button>
+                            <button id="ikarus_folder_create" class="menu_button" title="Create folder">+</button>
                         </div>
                         <div class="ikarus-manager-folder-add">
                             <input id="ikarus_cat_name" class="text_pole" placeholder="New category..." />
-                            <button id="ikarus_cat_create" class="menu_button" title="Create category">＋</button>
+                            <button id="ikarus_cat_create" class="menu_button" title="Create category">+</button>
                         </div>
                     </div>
                 </div>
                 <div class="ikarus-manager-main">
-                    <input id="ikarus_manager_search" class="text_pole" placeholder="🔍 Search by name or trigger..." />
+                    <input id="ikarus_manager_search" class="text_pole" placeholder="Search by name or trigger..." />
                     <div id="ikarus_manager_cards" class="ikarus-manager-cards"></div>
                 </div>
             </div>
@@ -666,7 +683,9 @@ function openGlobalManager() {
         const folders = es.repFolders || [];
         const categories = es.repCategories || [];
         const fc = es.folderCategories || {};
-        let html = `<div class="ikarus-folder-item ${activeFolder === null ? 'active' : ''}" data-folder="__all__">📋 All</div>`;
+        let html = `<div class="ikarus-folder-item ikarus-library-launch" data-folder="__library__"><span>Character Library</span><small>Reusable character sets</small></div>`;
+        html += `<div class="ikarus-manager-nav-label">GLOBAL REPLACEMENTS</div>`;
+        html += `<div class="ikarus-folder-item ${activeFolder === null ? 'active' : ''}" data-folder="__all__">All</div>`;
         html += `<div class="ikarus-folder-item ${activeFolder === '' ? 'active' : ''}" data-folder="__unfiled__">📄 Unfiled</div>`;
 
         // Render categories with nested folders
@@ -674,13 +693,13 @@ function openGlobalManager() {
             const catFolders = folders.filter(f => (fc[f] || '') === cat);
             html += `<div class="ikarus-cat-header">
                 <span class="ikarus-cat-toggle" data-cat="${esc(cat)}">📚 ${esc(cat)}</span>
-                <button class="ikarus-cat-delete" data-cat="${esc(cat)}" title="Delete category">✕</button>
+                <button class="ikarus-cat-delete" data-cat="${esc(cat)}" title="Delete category">&#10005;</button>
             </div>`;
             html += `<div class="ikarus-cat-children" data-cat="${esc(cat)}">`;
             for (const f of catFolders) {
                 html += `<div class="ikarus-folder-item ikarus-folder-nested ${activeFolder === f ? 'active' : ''}" data-folder="${esc(f)}">
                     <span>📁 ${esc(f)}</span>
-                    <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">✕</button>
+                    <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">&#10005;</button>
                 </div>`;
             }
             if (!catFolders.length) html += `<div class="ikarus-cat-empty">No folders</div>`;
@@ -699,7 +718,7 @@ function openGlobalManager() {
                             <option value="">—</option>
                             ${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
                         </select>
-                        <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">✕</button>
+                        <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">&#10005;</button>
                     </div>
                 </div>`;
             }
@@ -719,7 +738,7 @@ function openGlobalManager() {
         const folders = es.repFolders || [];
         const folderOpts = folders.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
 
-        let html = `<div class="ikarus-mgr-toolbar"><button id="ikarus_mgr_add" class="menu_button">➕ Add New</button><button id="ikarus_mgr_bulk" class="menu_button" style="margin-top:4px;">📦 Bulk Import JSON</button></div>`;
+        let html = `<div class="ikarus-mgr-toolbar"><button id="ikarus_mgr_add" class="menu_button">Add New</button><button id="ikarus_mgr_bulk" class="menu_button" style="margin-top:4px;">Bulk Import JSON</button></div>`;
 
         if (!filtered.length) {
             html += '<div style="text-align:center;opacity:0.4;padding:24px;">No replacements found.</div>';
@@ -729,7 +748,7 @@ function openGlobalManager() {
         for (const r of filtered) {
             const children = (es.replacements || []).filter(c => c.parentId === r.id);
             // Build selected folder option
-            let selOpts = `<option value=""${!r.folder ? ' selected' : ''}>— Unfiled —</option>`;
+            let selOpts = `<option value=""${!r.folder ? ' selected' : ''}>Unfiled</option>`;
             for (const f of folders) {
                 selOpts += `<option value="${esc(f)}"${r.folder === f ? ' selected' : ''}>${esc(f)}</option>`;
             }
@@ -763,6 +782,7 @@ function openGlobalManager() {
                 <label>Trigger</label><input class="text_pole mgr-ed-trigger" value="${esc(r.trigger || '')}" />
                 <label>Tags (🏷️)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
                 <label>Caption (💬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
+                <label>Krea 2 (K2)</label><textarea class="text_pole mgr-ed-krea2" rows="2">${esc(r.krea2 || '')}</textarea>
                 <label>Dedupe tag (🔁)</label><input class="text_pole mgr-ed-short-tag" value="${esc(r.shortTag || '')}" placeholder="e.g. darkness \\(konosuba\\) — used for 2nd+ occurrences in 'First full' mode" />
                 <label>Match</label>
                 <select class="text_pole mgr-ed-match">
@@ -787,26 +807,27 @@ function openGlobalManager() {
 
     function showAddForm() {
         const folders = es.repFolders || [];
-        let folderSel = `<option value="">— Unfiled —</option>`;
+        let folderSel = `<option value="">Unfiled</option>`;
         for (const f of folders) {
             folderSel += `<option value="${esc(f)}"${activeFolder && activeFolder === f ? ' selected' : ''}>${esc(f)}</option>`;
         }
         const existing = $('#ikarus_mgr_addform');
         if (existing.length) { existing.slideToggle(150); return; }
         const form = $(`<div id="ikarus_mgr_addform" class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);">
-            <div class="ikarus-mgr-name" style="margin-bottom:6px;">➕ New Replacement</div>
+            <div class="ikarus-mgr-name" style="margin-bottom:6px;">âž• New Replacement</div>
             <div class="ikarus-mgr-edit-grid">
                 <label>Name</label><input class="text_pole mgr-new-name" placeholder="e.g. Bloom(Winx)" />
                 <label>Trigger</label><input class="text_pole mgr-new-trigger" placeholder="e.g. bloom, Bloom winx, bloom winx club" />
                 <label>Tags (🏷️)</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
                 <label>Caption (💬)</label><textarea class="text_pole mgr-new-caption" rows="2" placeholder="Same as tags, or a descriptive caption"></textarea>
+                <label>Krea 2 (K2)</label><textarea class="text_pole mgr-new-krea2" rows="2" placeholder="Krea 2-specific replacement (optional)"></textarea>
                 <label>Match</label>
                 <select class="text_pole mgr-new-match"><option value="OR">OR</option><option value="AND">AND</option><option value="CHILD">CHILD</option></select>
                 <label>Priority</label><input class="text_pole mgr-new-priority" type="number" value="0" />
                 <label>Folder</label><select class="text_pole mgr-new-folder">${folderSel}</select>
             </div>
             <div class="ikarus-mgr-edit-btns">
-                <button class="menu_button" id="ikarus_mgr_addconfirm">➕ Add</button>
+                <button class="menu_button" id="ikarus_mgr_addconfirm">âž• Add</button>
                 <button class="menu_button" id="ikarus_mgr_addcancel">Cancel</button>
             </div>
         </div>`);
@@ -821,6 +842,7 @@ function openGlobalManager() {
     overlay.on('click', function (e) { if ($(e.target).is('#ikarus_manager_overlay')) closeGlobalManager(); });
     overlay.on('click', '.ikarus-folder-item', function () {
         const f = $(this).data('folder');
+        if (f === '__library__') { closeGlobalManager(); openCharacterLibrary(); return; }
         activeFolder = f === '__all__' ? null : (f === '__unfiled__' ? '' : f);
         renderFolders(); renderManagerCards();
     });
@@ -926,6 +948,7 @@ function openGlobalManager() {
         r.trigger = form.find('.mgr-ed-trigger').val()?.trim() || r.trigger;
         r.replacement = form.find('.mgr-ed-replacement').val()?.trim() || r.replacement;
         r.caption = form.find('.mgr-ed-caption').val()?.trim() || r.caption || r.replacement;
+        r.krea2 = form.find('.mgr-ed-krea2').val()?.trim() || r.krea2 || r.caption || r.replacement;
         r.shortTag = form.find('.mgr-ed-short-tag').val()?.trim() || '';
         r.matchMode = form.find('.mgr-ed-match').val() || 'OR';
         r.replaceMode = form.find('.mgr-ed-mode').val() || 'first';
@@ -945,8 +968,9 @@ function openGlobalManager() {
         const trigger = $('#ikarus_mgr_addform .mgr-new-trigger').val()?.trim();
         const replacement = $('#ikarus_mgr_addform .mgr-new-replacement').val()?.trim();
         const caption = $('#ikarus_mgr_addform .mgr-new-caption').val()?.trim();
+        const krea2 = $('#ikarus_mgr_addform .mgr-new-krea2').val()?.trim();
         if (!trigger) { toastr.warning('Trigger is required'); return; }
-        if (!replacement && !caption) { toastr.warning('Tags or Caption text is required'); return; }
+        if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
         es.replacements.push({
             id: uid(),
             name: $('#ikarus_mgr_addform .mgr-new-name').val()?.trim() || trigger,
@@ -954,7 +978,8 @@ function openGlobalManager() {
             trigger,
             matchMode: $('#ikarus_mgr_addform .mgr-new-match').val() || 'OR',
             replacement: replacement || caption || '',
-            caption: caption || replacement || '',
+            caption: caption || replacement || krea2 || '',
+            krea2: krea2 || caption || replacement || '',
             replaceMode: 'first',
             priority: parseInt($('#ikarus_mgr_addform .mgr-new-priority').val()) || 0,
             parentId: null, enabled: true,
@@ -972,7 +997,7 @@ function openGlobalManager() {
         const existing = $('#ikarus_mgr_bulkform');
         if (existing.length) { existing.slideToggle(150); return; }
         const folders = es.repFolders || [];
-        let folderSel = `<option value="">— Unfiled —</option>`;
+        let folderSel = `<option value="">Unfiled</option>`;
         for (const f of folders) {
             folderSel += `<option value="${esc(f)}"${activeFolder && activeFolder === f ? ' selected' : ''}>${esc(f)}</option>`;
         }
@@ -1015,7 +1040,8 @@ function openGlobalManager() {
             const trigger = aliases.join(', ');
             const tags = entry.tags || '';
             const caption = entry.caption || tags;
-            if (!trigger && !tags) continue;
+            const krea2 = entry.krea2 || caption || tags;
+            if (!trigger && !tags && !caption && !krea2) continue;
             es.replacements.push({
                 id: uid(), name: key.replace(/_/g, ' '),
                 scope, charId,
@@ -1023,6 +1049,7 @@ function openGlobalManager() {
                 matchMode: 'OR',
                 replacement: tags,
                 caption: caption,
+                krea2: krea2,
                 replaceMode: 'first', priority: 0,
                 parentId: null, enabled: true,
                 folder: scope === 'global' ? folder : '',
@@ -1043,6 +1070,114 @@ function openGlobalManager() {
     });
 }
 
+// ===========================================================================
+// Independent Character Library ? reusable local replacement/filter bundles
+// ===========================================================================
+function openCharacterLibrary() {
+    if ($('#ikarus_library_overlay').length) return;
+    const es = s();
+    const charId = getCurrentCharId();
+    const charName = getCurrentCharName();
+    const overlay = $(`
+    <div id="ikarus_library_overlay" class="ikarus-manager-overlay">
+      <div class="ikarus-manager-popup">
+        <div class="ikarus-manager-header"><span>&#128218; Independent Character Library</span><button id="ikarus_library_close" class="menu_button">&#10005;</button></div>
+        <div class="ikarus-manager-body">
+          <div class="ikarus-manager-sidebar">
+            <div class="ikarus-library-back"><button id="ikarus_library_back" class="menu_button">&#8592; Back to Global Manager</button></div>
+            <div class="ikarus-manager-nav-label">CHARACTER FOLDERS</div>
+            <div id="ikarus_library_folders" class="ikarus-manager-folder-list"></div>
+            <div class="ikarus-manager-sidebar-bottom">
+              <label class="ikarus-library-create-label">Create empty folder</label>
+              <div class="ikarus-manager-folder-add"><input id="ikarus_library_name" class="text_pole" placeholder="e.g. Naruto universe" /><button id="ikarus_library_save" class="menu_button" title="Create folder">+</button></div>
+              <div class="ikarus-hint">One folder can contain an entire reusable cast.</div>
+            </div>
+          </div>
+          <div class="ikarus-manager-main"><div id="ikarus_library_details" class="ikarus-manager-cards"></div></div>
+        </div>
+      </div>
+    </div>`);
+    $('body').append(overlay);
+    let selectedId = es.characterLibrary.folders[0]?.id || null;
+
+    const clone = value => JSON.parse(JSON.stringify(value));
+    function currentCharacterBundle(name) {
+        if (!charId) return null;
+        const localReplacements = (es.replacements || []).filter(r => r.scope === 'char' && r.charId === charId);
+        const localFilters = (es.filters || []).filter(f => f.scope === 'char' && f.charId === charId);
+        return {
+            id: uid(), name: name || charName, createdAt: new Date().toISOString(),
+            prefix: es.charPrefixes?.[charId] || '', prompt: clone(es.charPrompts?.[charId] || null),
+            replacements: clone(localReplacements), filters: clone(localFilters),
+        };
+    }
+    function renderFolders() {
+        const folders = es.characterLibrary.folders || [];
+        $('#ikarus_library_folders').html(folders.length ? folders.map(folder => `<div class="ikarus-folder-item ${folder.id === selectedId ? 'active' : ''}" data-id="${esc(folder.id)}"><span>&#128100; ${esc(folder.name)}</span><button class="ikarus-library-delete" data-id="${esc(folder.id)}" title="Delete library folder">&#10005;</button></div>`).join('') : '<div class="ikarus-cat-empty">No saved character folders.</div>');
+    }
+    function renderDetails() {
+        const folder = (es.characterLibrary.folders || []).find(x => x.id === selectedId);
+        if (!folder) { $('#ikarus_library_details').html('<div class="ikarus-library-empty"><h3>Character Library</h3><p>Create a universe or project folder on the left.</p><p>Then add reusable characters with Tags, Caption, and Krea 2 text.</p></div>'); return; }
+        const reps = folder.replacements || [], filters = folder.filters || [];
+        $('#ikarus_library_details').html(`
+          <div class="ikarus-library-titlebar"><div><h3>${esc(folder.name)}</h3><div class="ikarus-mgr-meta">${reps.length} character(s) · ${filters.length} filter(s)</div></div><button id="ikarus_library_import" class="menu_button primary" ${charId ? '' : 'disabled'}>Import all into ${esc(charId ? charName : 'current card')}</button></div>
+          <div class="ikarus-library-actions"><button id="ikarus_library_add_character" class="menu_button">+ Add character</button><button id="ikarus_library_remove_character" class="menu_button" ${reps.length ? '' : 'disabled'}>Remove character</button><button id="ikarus_library_overwrite" class="menu_button" ${charId ? '' : 'disabled'}>Replace folder with current card</button></div>
+          <div id="ikarus_library_character_form"></div>
+          <div class="ikarus-library-list">${reps.length ? reps.map(r => `<div class="ikarus-mgr-card"><div class="ikarus-mgr-name">${esc(r.name || 'Unnamed character')}</div><div class="ikarus-mgr-trigger"><b>Trigger:</b> ${esc(r.trigger || '')}</div><div class="ikarus-mgr-replace"><b>Tags:</b> ${esc((r.replacement || '').slice(0,160))}</div>${r.caption ? `<div class="ikarus-mgr-replace"><b>Caption:</b> ${esc((r.caption || '').slice(0,160))}</div>` : ''}${r.krea2 ? `<div class="ikarus-mgr-replace"><b>Krea 2:</b> ${esc((r.krea2 || '').slice(0,160))}</div>` : ''}</div>`).join('') : '<div class="ikarus-library-empty compact"><p>This folder has no characters yet.</p><p>Click <b>Add character</b> above.</p></div>'}</div>
+          ${filters.map(f => `<div class="ikarus-mgr-card"><b>${esc(f.name || 'Unnamed filter')}</b><div>Filter trigger: ${esc(f.trigger || '')}</div></div>`).join('')}`);
+    }
+    function importBundle(folder) {
+        if (!charId) { toastr.warning('Select a character first'); return; }
+        const idMap = new Map();
+        const rules = clone(folder.replacements || []);
+        for (const r of rules) idMap.set(r.id, uid());
+        for (const r of rules) { r.id = idMap.get(r.id); r.parentId = r.parentId ? (idMap.get(r.parentId) || null) : null; r.scope = 'char'; r.charId = charId; r.folder = ''; }
+        const filters = clone(folder.filters || []).map(f => ({ ...f, id: uid(), scope: 'char', charId }));
+        es.replacements.push(...rules); es.filters.push(...filters);
+        if (folder.prefix) es.charPrefixes[charId] = folder.prefix;
+        if (folder.prompt) es.charPrompts[charId] = clone(folder.prompt);
+        saveSettingsDebounced(); loadCharPrefix(); loadCharPrompt(); renderReplacementList(); renderFilterList();
+        toastr.success(`Imported ${rules.length} replacement(s) and ${filters.length} filter(s) into ${charName}`);
+    }
+    renderFolders(); renderDetails();
+    overlay.on('click', '#ikarus_library_close', () => overlay.remove());
+    overlay.on('click', '#ikarus_library_back', () => { overlay.remove(); openGlobalManager(); });
+    overlay.on('click', e => { if ($(e.target).is('#ikarus_library_overlay')) overlay.remove(); });
+    overlay.on('click', '.ikarus-folder-item', function () { selectedId = $(this).data('id'); renderFolders(); renderDetails(); });
+    overlay.on('click', '.ikarus-library-delete', function (e) { e.stopPropagation(); const id=$(this).data('id'); const folder=es.characterLibrary.folders.find(x=>x.id===id); if (!folder || !confirm(`Delete library folder "${folder.name}"? This does not affect any character card.`)) return; es.characterLibrary.folders=es.characterLibrary.folders.filter(x=>x.id!==id); selectedId=es.characterLibrary.folders[0]?.id||null; saveSettingsDebounced(); renderFolders(); renderDetails(); });
+    overlay.on('click', '#ikarus_library_save', function () { const name=$('#ikarus_library_name').val()?.trim(); if (!name) { toastr.warning('Enter a folder name'); return; } if (es.characterLibrary.folders.some(x => x.name.toLowerCase() === name.toLowerCase())) { toastr.warning('Folder already exists'); return; } const folder={id:uid(),name,createdAt:new Date().toISOString(),prefix:'',prompt:null,replacements:[],filters:[]}; es.characterLibrary.folders.push(folder); selectedId=folder.id; $('#ikarus_library_name').val(''); saveSettingsDebounced(); renderFolders(); renderDetails(); toastr.success(`Created "${name}"`); });
+    overlay.on('click', '#ikarus_library_overwrite', function () { const folder=es.characterLibrary.folders.find(x=>x.id===selectedId); if (!folder || !charId) return; if (!confirm(`Replace saved contents of "${folder.name}" with ${charName}'s current local rules?`)) return; const bundle=currentCharacterBundle(folder.name); Object.assign(folder,bundle,{id:folder.id}); saveSettingsDebounced(); renderDetails(); toastr.success(`Updated "${folder.name}"`); });
+    overlay.on('click', '#ikarus_library_import', function () { const folder=es.characterLibrary.folders.find(x=>x.id===selectedId); if (folder) importBundle(folder); });
+    overlay.on('click', '#ikarus_library_add_character', function () {
+        $('#ikarus_library_character_form').html(`<div class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);"><div class="ikarus-mgr-name">Add a character to this library folder</div><div class="ikarus-mgr-edit-grid"><label>Character name</label><input class="text_pole lib-char-name" placeholder="e.g. Naruto Uzumaki" /><label>Trigger words</label><input class="text_pole lib-char-trigger" placeholder="e.g. naruto, naruto uzumaki" /><label>Tags</label><textarea class="text_pole lib-char-tags" rows="2" placeholder="Danbooru-style replacement"></textarea><label>Caption</label><textarea class="text_pole lib-char-caption" rows="2" placeholder="Natural-language replacement"></textarea><label>Krea 2</label><textarea class="text_pole lib-char-krea2" rows="2" placeholder="Krea 2-specific replacement"></textarea></div><div class="ikarus-mgr-edit-btns"><button id="ikarus_library_add_character_confirm" class="menu_button">Add character</button><button id="ikarus_library_character_cancel" class="menu_button">Cancel</button></div></div>`);
+    });
+    overlay.on('click', '#ikarus_library_character_cancel', function () { $('#ikarus_library_character_form').empty(); });
+    overlay.on('click', '#ikarus_library_add_character_confirm', function () {
+        const folder = es.characterLibrary.folders.find(x => x.id === selectedId); if (!folder) return;
+        const form = $('#ikarus_library_character_form');
+        const name = form.find('.lib-char-name').val()?.trim(); const trigger = form.find('.lib-char-trigger').val()?.trim();
+        const tags = form.find('.lib-char-tags').val()?.trim(); const caption = form.find('.lib-char-caption').val()?.trim(); const krea2 = form.find('.lib-char-krea2').val()?.trim();
+        if (!name) { toastr.warning('Character name is required'); return; }
+        if (!trigger) { toastr.warning('Trigger words are required'); return; }
+        if (!tags && !caption && !krea2) { toastr.warning('Enter Tags, Caption, or Krea 2 text'); return; }
+        if (!Array.isArray(folder.replacements)) folder.replacements = [];
+        folder.replacements.push({ id: uid(), name, trigger, matchMode: 'OR', replacement: tags || caption || krea2, caption: caption || tags || krea2, krea2: krea2 || caption || tags, shortTag: '', replaceMode: 'first', priority: 0, parentId: null, enabled: true, scope: 'char', charId: null, folder: '' });
+        saveSettingsDebounced(); renderDetails(); toastr.success(`Added ${name} to ${folder.name}`);
+    });
+    overlay.on('click', '#ikarus_library_remove_character', function () {
+        const folder = es.characterLibrary.folders.find(x => x.id === selectedId); if (!folder) return;
+        const reps = folder.replacements || [];
+        $('#ikarus_library_character_form').html(`<div class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);"><div class="ikarus-mgr-name">Remove a character</div><label>Choose character</label><select id="ikarus_library_remove_select" class="text_pole">${reps.map(r => `<option value="${esc(r.id)}">${esc(r.name || r.trigger || 'Unnamed character')}</option>`).join('')}</select><div class="ikarus-mgr-edit-btns"><button id="ikarus_library_remove_character_confirm" class="menu_button">Remove selected character</button><button id="ikarus_library_character_cancel" class="menu_button">Cancel</button></div></div>`);
+    });
+    overlay.on('click', '#ikarus_library_remove_character_confirm', function () {
+        const folder = es.characterLibrary.folders.find(x => x.id === selectedId); if (!folder) return;
+        const id = $('#ikarus_library_remove_select').val(); const rule = (folder.replacements || []).find(r => r.id === id); if (!rule) return;
+        if (!confirm(`Remove "${rule.name || rule.trigger}" from library folder "${folder.name}"?`)) return;
+        folder.replacements = folder.replacements.filter(r => r.id !== id && r.parentId !== id);
+        saveSettingsDebounced(); renderDetails(); toastr.success('Character removed from library folder');
+    });
+}
+
 function closeGlobalManager() {
     $('#ikarus_manager_overlay').remove();
 }
@@ -1051,6 +1186,7 @@ function closeGlobalManager() {
 // PROCESSING: Apply Replacements (in-place, with children priority)
 // ==========================================================================
 function applyReplacements(text) {
+    if (s().replacementsEnabled === false) return text;
     const all = activeItems(s().replacements || []);
     if (!all.length) return text;
 
@@ -1125,7 +1261,10 @@ function triggerMatches(text, rule) {
 function doReplace(text, rule) {
     const keywords = rule.trigger.split(',').map(k => k.trim()).filter(Boolean);
     // Use tags or caption based on the global toggle
-    const activeText = s().repFieldMode === 'caption' ? (rule.caption || rule.replacement || '') : (rule.replacement || '');
+    const mode = s().repFieldMode;
+    const activeText = mode === 'caption' ? (rule.caption || rule.replacement || rule.krea2 || '')
+        : mode === 'krea2' ? (rule.krea2 || rule.caption || rule.replacement || '')
+            : (rule.replacement || rule.caption || rule.krea2 || '');
     let result = text;
     for (const kw of keywords) {
         const escaped = escRegex(kw);
@@ -1360,7 +1499,7 @@ function syncPromptInjection() {
     try {
         const es = s();
         const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
-        const isSeparate = es.generationMode === 'separate';
+        const isSeparate = es.generationMode === 'separate' || es.generationMode === 'standalone';
         const isAppendUser = es.promptInjection?.position === 'append_user';
         const isMacro = es.promptInjection?.position === 'macro';
         const { promptText, charPrompt } = enabled ? getPromptInjectionText() : { promptText: '', charPrompt: '' };
@@ -1393,7 +1532,7 @@ let _isAwaitingNewMessage = false;
 function appendPromptToLastUserMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
-    if (es.generationMode === 'separate') return;
+    if (es.generationMode === 'separate' || es.generationMode === 'standalone') return;
     if (es.promptInjection?.position !== 'append_user') return;
     if (!es.promptInjection?.enabled) return;
 
@@ -1474,6 +1613,7 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
     }
     renderReplacementList();
     renderFilterList();
+    renderStandaloneGallery();
 });
 
 // ==========================================================================
@@ -1541,6 +1681,16 @@ function populateProfileDropdown() {
         }
     } catch (e) { console.warn(`[${EXT}] Could not load connection profiles:`, e); }
     $select.val(s().separateProfile || '');
+    const $standaloneProfile = $('#ikarus_standalone_profile');
+    if ($standaloneProfile.length) {
+        $standaloneProfile.html($select.html());
+        $standaloneProfile.val(s().standalone?.profile || '');
+    }
+    const $windowProfile = $('#ikarus_window_profile');
+    if ($windowProfile.length) {
+        $windowProfile.html($select.html());
+        $windowProfile.val(s().standalone?.profile || '');
+    }
 }
 
 async function handleSeparateMode() {
@@ -1885,6 +2035,20 @@ async function handleIncomingMessage() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
 
+    if (es.generationMode === 'standalone') {
+        // Guard against stale/spurious triggers (e.g. switching chats or cards).
+        // Only auto-generate for a genuine, freshly received AI message.
+        if (!es.standalone.auto) return;
+        const context = getContext();
+        const message = context.chat[context.chat.length - 1];
+        if (!message || message.is_user || !(message.mes || '').trim()) {
+            console.log(`[${EXT}] Standalone auto: ignored non-AI/empty message trigger`);
+            return;
+        }
+        await runStandaloneGeneration('', true);
+        return;
+    }
+
     if (es.generationMode === 'separate') {
         if (!es.separateEnabled) return;
         await handleSeparateMode();
@@ -1961,6 +2125,175 @@ async function handleIncomingMessage() {
 }
 
 // ==========================================================================
+// STANDALONE GALLERY — isolated from roleplay messages
+// ==========================================================================
+let _standaloneCancelled = false;
+let _standaloneBusy = false;
+let _standaloneGenerator = null;
+
+function standaloneChatKey() {
+    try {
+        const c = getContext();
+        return String(c.chatId || c.chat_id || c.groupId || getCurrentCharId() || 'no_chat');
+    } catch { return 'no_chat'; }
+}
+function standaloneLibrary() {
+    const st = s().standalone;
+    const key = standaloneChatKey();
+    if (!st.libraries[key]) st.libraries[key] = { images: [], assistant: [] };
+    return st.libraries[key];
+}
+function syncStandaloneBubbleVisibility() {
+    const bubble = $('#ikarus_standalone_bubble');
+    if (bubble.length) bubble.toggle(!s().standalone.hideBubble);
+}
+function createStandaloneWindow() {
+    if ($('#ikarus_standalone_bubble').length) return;
+    $('body').append(`<button id="ikarus_standalone_bubble" title="Open Standalone Image Studio"><span>🖼️</span></button>
+    <section id="ikarus_standalone_window" class="closed">
+      <header id="ikarus_standalone_header"><b>Standalone Image Studio</b><span id="ikarus_standalone_status">Ready</span><button id="ikarus_standalone_minimize" type="button" title="Close to bubble">&times;</button></header>
+      <nav class="ikarus-standalone-tabs"><button class="active" data-tab="chat">Assistant</button><button data-tab="gallery">Gallery <span id="ikarus_gallery_badge">0</span></button></nav>
+      <div class="ikarus-standalone-toolbar"><label class="ikarus-auto-label"><input type="checkbox" id="ikarus_window_auto"><span>Auto mode</span></label><label>Profile <select id="ikarus_window_profile"><option value="">Same as Current</option></select></label><label>Context <input type="number" id="ikarus_window_context" min="1" max="999"></label><label>Images <input type="number" id="ikarus_window_count" min="1" max="30"></label><button id="ikarus_standalone_clear">Clear gallery</button></div>
+      <main id="ikarus_standalone_chat_tab" class="ikarus-standalone-tab active"><div class="ikarus-assistant-intro"><h3>Image Assistant</h3><p>Ask for one image or a chronological scene sequence. Story context is added automatically.</p></div><div id="ikarus_standalone_chatlog"></div></main>
+      <main id="ikarus_standalone_gallery_tab" class="ikarus-standalone-tab"><div id="ikarus_standalone_gallery"></div></main>
+      <div id="ikarus_standalone_progress"></div>
+      <footer><textarea id="ikarus_standalone_request" rows="2" placeholder="Describe an image, or ask for a chronological image sequence..."></textarea><button id="ikarus_standalone_send">Generate</button><button id="ikarus_standalone_stop" disabled>Stop</button></footer>
+      <div class="ikarus-resize-grip" title="Drag to resize"></div>
+    </section>
+    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header · drag corner</span><button class="ikarus-viewer-meta-toggle">Hide details</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
+    const win=$('#ikarus_standalone_window'), bubble=$('#ikarus_standalone_bubble');
+    syncStandaloneBubbleVisibility();
+    function switchTab(tab){ $('.ikarus-standalone-tabs button').removeClass('active').filter(`[data-tab="${tab}"]`).addClass('active'); $('.ikarus-standalone-tab').removeClass('active'); $(`#ikarus_standalone_${tab}_tab`).addClass('active'); }
+    $('.ikarus-standalone-tabs button').on('click',function(){switchTab($(this).data('tab'));});
+    let windowDrag=null, bubbleDrag=null, bubbleMoved=false;
+    $('#ikarus_standalone_header').on('pointerdown',function(e){if($(e.target).is('button'))return;const r=win[0].getBoundingClientRect();windowDrag={x:e.clientX-r.left,y:e.clientY-r.top};this.setPointerCapture(e.pointerId);e.preventDefault();});
+    $('#ikarus_standalone_header').on('pointermove',function(e){if(!windowDrag)return;const maxX=Math.max(0,innerWidth-win.outerWidth()),maxY=Math.max(0,innerHeight-win.outerHeight());win.css({left:Math.min(maxX,Math.max(0,e.clientX-windowDrag.x)),top:Math.min(maxY,Math.max(0,e.clientY-windowDrag.y)),right:'auto',bottom:'auto'});});
+    $('#ikarus_standalone_header').on('pointerup pointercancel',()=>windowDrag=null);
+    bubble.on('pointerdown',function(e){const r=this.getBoundingClientRect();bubbleDrag={x:e.clientX-r.left,y:e.clientY-r.top};bubbleMoved=false;this.setPointerCapture(e.pointerId);e.preventDefault();});
+    bubble.on('pointermove',function(e){if(!bubbleDrag)return;if(Math.abs(e.movementX)+Math.abs(e.movementY)>1)bubbleMoved=true;const maxX=innerWidth-bubble.outerWidth(),maxY=innerHeight-bubble.outerHeight();bubble.css({left:Math.min(maxX,Math.max(0,e.clientX-bubbleDrag.x)),top:Math.min(maxY,Math.max(0,e.clientY-bubbleDrag.y)),right:'auto',bottom:'auto'});});
+    bubble.on('pointerup pointercancel',function(){if(!bubbleMoved){win.removeClass('closed');s().standalone.bubbleOpen=true;saveSettingsDebounced();renderStandaloneGallery();}bubbleDrag=null;});
+    $('#ikarus_standalone_minimize').on('click',()=>{win.addClass('closed');s().standalone.bubbleOpen=false;saveSettingsDebounced();});
+    $('#ikarus_standalone_send').on('click',()=>{const box=$('#ikarus_standalone_request');const request=box.val()?.trim()||'';if(!request)return;box.val('');appendStandaloneChat('user',request);runStandaloneGeneration(request,false);});
+    $('#ikarus_standalone_stop').on('click',stopStandaloneGeneration);
+    $('#ikarus_window_auto').on('change',function(){s().standalone.auto=$(this).prop('checked');$('#ikarus_standalone_auto').prop('checked',s().standalone.auto);saveSettingsDebounced();});
+    $('#ikarus_window_profile').on('change',function(){s().standalone.profile=$(this).val();$('#ikarus_standalone_profile').val(s().standalone.profile);saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_window_context').on('change',function(){s().standalone.contextSize=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
+    $('#ikarus_window_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
+    $('#ikarus_standalone_clear').on('click',()=>{if(confirm('Clear this chat gallery?')){standaloneLibrary().images=[];saveSettingsDebounced();renderStandaloneGallery();}});
+    let resizeState=null;
+    $('.ikarus-resize-grip').on('pointerdown',function(e){const r=win[0].getBoundingClientRect();resizeState={x:e.clientX,y:e.clientY,w:r.width,h:r.height};this.setPointerCapture(e.pointerId);e.preventDefault();e.stopPropagation();});
+    $('.ikarus-resize-grip').on('pointermove',function(e){if(!resizeState)return;win.css({width:Math.max(420,resizeState.w+e.clientX-resizeState.x),height:Math.max(380,resizeState.h+e.clientY-resizeState.y)});});
+    $('.ikarus-resize-grip').on('pointerup pointercancel',()=>resizeState=null);
+    $('#ikarus_image_viewer .ikarus-viewer-close').on('click', closeStandaloneViewer);
+    $('#ikarus_image_viewer .ikarus-viewer-meta-toggle').on('click', function () {
+        const viewer = $('#ikarus_image_viewer');
+        viewer.toggleClass('details-hidden');
+        $(this).text(viewer.hasClass('details-hidden') ? 'Details' : 'Hide details');
+    });
+    let viewerDrag = null;
+    let viewerResize = null;
+    $('#ikarus_image_viewer').on('pointerdown', '#ikarus_viewer_header', function (e) {
+        if ($(e.target).is('button')) return;
+        const r = $('#ikarus_image_viewer')[0].getBoundingClientRect();
+        viewerDrag = { x: e.clientX - r.left, y: e.clientY - r.top };
+        this.setPointerCapture(e.pointerId);
+        e.preventDefault();
+    });
+    $('#ikarus_image_viewer').on('pointermove', '#ikarus_viewer_header', function (e) {
+        if (!viewerDrag) return;
+        $('#ikarus_image_viewer').css({ left: Math.max(0, e.clientX - viewerDrag.x), top: Math.max(0, e.clientY - viewerDrag.y), right: 'auto', bottom: 'auto' });
+    });
+    $('#ikarus_image_viewer').on('pointerup pointercancel', '#ikarus_viewer_header', () => viewerDrag = null);
+    $('#ikarus_image_viewer').on('pointerdown', '.ikarus-viewer-resize', function (e) {
+        const r = $('#ikarus_image_viewer')[0].getBoundingClientRect();
+        viewerResize = { x: e.clientX, y: e.clientY, w: r.width, h: r.height };
+        this.setPointerCapture(e.pointerId);
+        e.preventDefault(); e.stopPropagation();
+    });
+    $('#ikarus_image_viewer').on('pointermove', '.ikarus-viewer-resize', function (e) {
+        if (!viewerResize) return;
+        $('#ikarus_image_viewer').css({ width: Math.max(500, viewerResize.w + e.clientX - viewerResize.x), height: Math.max(400, viewerResize.h + e.clientY - viewerResize.y) });
+    });
+    $('#ikarus_image_viewer').on('pointerup pointercancel', '.ikarus-viewer-resize', () => viewerResize = null);
+    $('#ikarus_image_viewer .ikarus-viewer-prev').on('click', () => stepStandaloneViewer(-1));
+    $('#ikarus_image_viewer .ikarus-viewer-next').on('click', () => stepStandaloneViewer(1));
+    $('#ikarus_image_viewer').on('click','.ikarus-viewer-copy',async()=>{const text=$('#ikarus_image_viewer textarea').val();try{await navigator.clipboard.writeText(text);toastr.success('Prompt copied');}catch{toastr.warning('Could not copy prompt');}});
+    $('#ikarus_image_viewer').on('click','.ikarus-viewer-open',()=>{const src=$('#ikarus_image_viewer img').attr('src');if(src)window.open(src,'_blank','noopener');});
+    $(document).on('keydown.ikarusViewer',e=>{if($('#ikarus_image_viewer').hasClass('closed'))return;if(e.key==='Escape')closeStandaloneViewer();if(e.key==='ArrowLeft')stepStandaloneViewer(-1);if(e.key==='ArrowRight')stepStandaloneViewer(1);});
+    if(s().standalone.bubbleOpen)win.removeClass('closed');
+    renderStandaloneGallery();
+}
+function appendStandaloneChat(role,text){
+    const lib=standaloneLibrary(); if(!Array.isArray(lib.assistant))lib.assistant=[];
+    lib.assistant.push({role,text:String(text||''),createdAt:new Date().toISOString()});
+    if(lib.assistant.length>60)lib.assistant=lib.assistant.slice(-60);saveSettingsDebounced();renderStandaloneChat();
+}
+function renderStandaloneChat(){
+    if(!$('#ikarus_standalone_chatlog').length)return;const rows=standaloneLibrary().assistant||[];
+    $('#ikarus_standalone_chatlog').html(rows.map(x=>`<div class="ikarus-assistant-message ${x.role}"><b>${x.role==='user'?'You':'Image Assistant'}</b><div>${esc(x.text)}</div></div>`).join(''));
+    const el=$('#ikarus_standalone_chatlog')[0];if(el)el.scrollTop=el.scrollHeight;
+}
+let _standaloneViewerIndex=0;
+function renderStandaloneGallery() {
+    if (!$('#ikarus_standalone_window').length) return;
+    const st=s().standalone, lib=standaloneLibrary();
+    $('#ikarus_gallery_badge').text(lib.images.length); renderStandaloneChat();
+    $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
+    $('#ikarus_standalone_gallery').html(lib.images.length ? lib.images.map((x,i)=>`<figure data-i="${i}"><button class="ikarus-gallery-image" data-i="${i}" title="Open image viewer"><img src="${esc(x.url)}" loading="lazy"></button><figcaption><span>Image ${i+1}</span><span class="ikarus-gallery-actions"><button class="ikarus-gallery-detach" data-i="${i}" title="Open detached viewer">&#8599;</button><button class="ikarus-gallery-info" data-i="${i}" title="View prompt and metadata">&#9998;</button><button class="ikarus-gallery-delete" data-i="${i}" title="Delete image">&times;</button></span></figcaption></figure>`).join('') : '<div class="ikarus-gallery-empty">This chat has no standalone images yet.</div>');
+    $('#ikarus_standalone_gallery .ikarus-gallery-image').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
+    $('#ikarus_standalone_gallery .ikarus-gallery-detach').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
+    $('#ikarus_standalone_gallery .ikarus-gallery-info').on('click',function(){openStandaloneViewer(Number($(this).data('i')),true);});
+    $('#ikarus_standalone_gallery .ikarus-gallery-delete').on('click',function(){const i=Number($(this).data('i'));if(confirm(`Delete Image ${i+1}?`)){lib.images.splice(i,1);saveSettingsDebounced();renderStandaloneGallery();}});
+}
+function openStandaloneViewer(index,focusMetadata=false){
+    const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=Math.max(0,Math.min(index,images.length-1));
+    const item=images[_standaloneViewerIndex],viewer=$('#ikarus_image_viewer');viewer.find('img').attr('src',item.url);viewer.find('textarea').val(item.prompt||'Prompt not stored for this older gallery item.');viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex+1} of ${images.length}</b><span>Created: ${esc(item.createdAt?new Date(item.createdAt).toLocaleString():'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);viewer.removeClass('closed');viewer.find('.ikarus-viewer-prev').prop('disabled',images.length<2);viewer.find('.ikarus-viewer-next').prop('disabled',images.length<2);if(focusMetadata)setTimeout(()=>viewer.find('textarea').trigger('focus').trigger('select'),0);
+}
+function closeStandaloneViewer(){$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
+function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=(_standaloneViewerIndex+delta+images.length)%images.length;openStandaloneViewer(_standaloneViewerIndex);}
+function standaloneContextText() {
+    const c=getContext(), n=Math.max(1,Number(s().standalone.contextSize)||1);
+    return c.chat.filter(m=>m?.mes).slice(-n).map((m,i)=>`Message ${i+1} (${m.is_user?'user':'character'}):\n${m.mes}`).join('\n\n');
+}
+async function requestStandalonePrompts(request, auto) {
+    const es=s(), st=es.standalone, count=Math.max(1,Number(st.imageCount)||1), context=standaloneContextText();
+    const base=getPromptInjectionText().promptText;
+    const system=`${base}\n\n${st.systemPrompt||''}\nYou are a standalone image director. Never roleplay and never rewrite the source messages. Return only ${count} chronological image prompts, each exactly in [pic prompt="..."] format. Each image must depict a distinct visual beat and progress the scene in source order.`;
+    const user=`${auto?'Automatically create a chronological image sequence from the new story activity.':request||`Create ${count} images from this story context.`}\n\nSTORY CONTEXT:\n${context}`;
+    const messages=[{role:'system',content:system},{role:'user',content:user}], ctx=getContext(), profile=st.profile||es.separateProfile||'';
+    if (ctx.ConnectionManagerRequestService?.sendRequest) {
+        const cg=await ctx.ConnectionManagerRequestService.sendRequest(profile,messages,undefined,{stream:true}); let out='';
+        if(typeof cg==='function'){ _standaloneGenerator=cg(); for await(const chunk of _standaloneGenerator){ if(_standaloneCancelled) break; if(chunk?.text!==undefined){out=chunk.text; $('#ikarus_standalone_progress').text('Planning prompts...');} } }
+        else out=cg?.content||cg?.text||String(cg||'');
+        return out;
+    }
+    return await generateRaw(`${system}\n\n${user}`,'',false,false);
+}
+async function runStandaloneGeneration(request='',auto=false){
+    if(_standaloneBusy) return; createStandaloneWindow(); _standaloneBusy=true; _standaloneCancelled=false;
+    $('#ikarus_standalone_send').prop('disabled',true); $('#ikarus_standalone_stop').prop('disabled',false); $('#ikarus_standalone_status').text('Planning'); $('#ikarus_standalone_progress').text('Reading story context...');
+    try{
+        const raw=await requestStandalonePrompts(request,auto); if(_standaloneCancelled) return;
+        let matches=getImagePromptMatches(normalizePicPrompts(raw||''),s().promptInjection.regex);
+        if(!matches.length) throw new Error('The assistant returned no [pic prompt] entries.');
+        appendStandaloneChat('assistant', `Prepared ${matches.length} image prompt${matches.length===1?'':'s'}. Generation has started.`);
+        $('#ikarus_standalone_progress').text(`Found ${matches.length} prompts. Generating 0 / ${matches.length}`);
+        const lib=standaloneLibrary();
+        for(let i=0;i<matches.length;i++){
+            if(_standaloneCancelled) break;
+            const prompt=processPrompt(matches[i].prompt,'').prompt; markProcessedSdPrompt(prompt);
+            $('#ikarus_standalone_status').text(`Generating ${i+1}/${matches.length}`);
+            const url=await SlashCommandParser.commands['sd'].callback({quiet:'true'},prompt);
+            if(typeof url==='string'&&url.trim()){lib.images.push({id:uid(),url:url.trim(),prompt,createdAt:new Date().toISOString()});saveSettingsDebounced();renderStandaloneGallery();if(i===0)$('.ikarus-standalone-tabs button[data-tab="gallery"]').trigger('click');}
+            $('#ikarus_standalone_progress').text(`Generated ${i+1} / ${matches.length}`);
+        }
+        if(!auto) $('#ikarus_standalone_request').val('');
+    }catch(e){appendStandaloneChat('assistant',`Error: ${e.message||e}`);toastr.error(`Standalone: ${e.message||e}`); $('#ikarus_standalone_progress').text(`Error: ${e.message||e}`);}
+    finally{_standaloneBusy=false;_standaloneGenerator=null;$('#ikarus_standalone_send').prop('disabled',false);$('#ikarus_standalone_stop').prop('disabled',true);$('#ikarus_standalone_status').text(_standaloneCancelled?'Stopped':'Ready');}
+}
+function stopStandaloneGeneration(){_standaloneCancelled=true;try{_standaloneGenerator?.return?.();}catch{} $('#ikarus_standalone_status').text('Stopping');}
+
+// ==========================================================================
 // UI Setup
 // ==========================================================================
 let _addChildParentId = null;
@@ -1977,6 +2310,8 @@ async function createSettings(html) {
     $('#ikarus_generation_mode').on('change', function () {
         s().generationMode = $(this).val();
         $('.ikarus-separate-options').toggle($(this).val() === 'separate');
+        $('.ikarus-standalone-options').toggle($(this).val() === 'standalone');
+        if ($(this).val() === 'standalone') createStandaloneWindow();
         syncPromptInjection();
         saveSettingsDebounced();
     });
@@ -1992,6 +2327,13 @@ async function createSettings(html) {
         s().separateContextSize = parseInt($(this).val()) || 0;
         saveSettingsDebounced();
     });
+    $('#ikarus_standalone_auto').on('change', function(){s().standalone.auto=$(this).prop('checked');saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_standalone_context').on('change',function(){s().standalone.contextSize=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_standalone_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_standalone_profile').on('change',function(){s().standalone.profile=$(this).val();saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_standalone_hide_bubble').on('change',function(){s().standalone.hideBubble=$(this).prop('checked');saveSettingsDebounced();syncStandaloneBubbleVisibility();});
+    $('#ikarus_standalone_system').on('input',function(){s().standalone.systemPrompt=$(this).val();saveSettingsDebounced();});
+    $('#ikarus_standalone_open').on('click',function(){createStandaloneWindow();$('#ikarus_standalone_window').removeClass('closed');});
     $('#ikarus_manual_rescan').on('click', handleManualRescan);
 
     // Section 2: Presets
@@ -2029,7 +2371,7 @@ async function createSettings(html) {
         const pid = _addChildParentId || $(this).data('parent-id') || null;
         addReplacement(pid);
         _addChildParentId = null;
-        $('#ikarus_rep_add').text('➕ Add Replacement');
+        $('#ikarus_rep_add').text('âž• Add Replacement');
     });
     // Show/hide dedupe tag row based on mode selection
     $('#ikarus_rep_mode').on('change', function () {
@@ -2043,6 +2385,11 @@ async function createSettings(html) {
     $('#ikarus_flt_action').on('change', updateFilterFormVisibility);
 
     // Section 5: Processing & Cleaners
+    $('#ikarus_replacements_enabled').on('change', function () {
+        s().replacementsEnabled = $(this).prop('checked');
+        saveSettingsDebounced();
+        toastr.info(`Replacements ${s().replacementsEnabled ? 'enabled' : 'disabled'}`);
+    });
     $('#ikarus_invert_order').on('change', function () { s().invertProcessingOrder = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_rep_field_mode').val(s().repFieldMode || 'tags');
     $('#ikarus_rep_field_mode').on('change', function () {
@@ -2070,7 +2417,7 @@ async function createSettings(html) {
         const parentId = $(this).closest('.ikarus-card').data('id');
         const parentName = s().replacements.find(r => r.id === parentId)?.name || '';
         _addChildParentId = parentId;
-        $('#ikarus_rep_add').text(`➕ Add Child of "${parentName}"`);
+        $('#ikarus_rep_add').text(`âž• Add Child of "${parentName}"`);
         $('#ikarus_rep_name').focus();
         toastr.info(`Adding child for "${parentName}". Fill the form and click Add.`);
     });
@@ -2079,6 +2426,7 @@ async function createSettings(html) {
         transferItem(c.data('id'), c.data('type'));
     });
     $('#ikarus_rep_manage').on('click', openGlobalManager);
+    $('#ikarus_library_manage').on('click', openGlobalManager);
 
     updateUI();
     updateFilterFormVisibility();
@@ -2135,6 +2483,7 @@ $(function () {
         $('#extensionsMenu').append(`<div id="ikarus_auto_image_btn" class="list-group-item flex-container flexGap5"><div class="fa-solid fa-feather"></div><span>Ikarus Auto Image</span></div>`);
         $('#ikarus_auto_image_btn').off('click').on('click', onMenuButtonClick);
         await createSettings(settingsHtml);
+        if (s().generationMode === 'standalone') createStandaloneWindow();
         syncPromptInjection();
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
         console.log(`[${EXT}] Extension loaded`);
