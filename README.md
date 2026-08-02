@@ -59,6 +59,11 @@ Add per-character style instructions, danbooru tag lists, or generation rules th
 ### Global Manager
 Click **Manage** to open the folder/category organizer for your global replacements. Create categories (e.g., "Cartoon", "Video Games") and folders (e.g., "Winx Club", "Nier Automata") to keep things tidy.
 
+### Standalone mode
+Added a standalone mode that spawn a pop up window that can be opened and closed to auto generate image or even ask your ai to generate more and save by chat ! but also saved in your galery in case.
+<img width="2034" height="1061" alt="image" src="https://github.com/user-attachments/assets/962a38af-19e1-4040-9fe5-76d0f637d8ce" />
+
+
 ## License
 
 MIT
