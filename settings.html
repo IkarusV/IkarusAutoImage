@@ -54,6 +54,13 @@
                 <div class="ikarus-row"><label>Context messages</label><input id="ikarus_standalone_context" type="number" min="1" max="999" value="5" class="text_pole widthUnset"><label>Images per request</label><input id="ikarus_standalone_count" type="number" min="1" max="30" value="3" class="text_pole widthUnset"></div>
                 <div class="ikarus-row"><label for="ikarus_standalone_profile">Standalone AI connection profile</label><select id="ikarus_standalone_profile" class="text_pole"><option value="">Same as Current</option></select></div>
                 <div class="ikarus-hint">This model creates image prompts. It is separate from the image generator selected by SillyTavern's /sd command.</div>
+                <div class="ikarus-standalone-context-settings">
+                    <b>Optional context sources</b>
+                    <div class="ikarus-hint">All are off by default for minimum token usage. Recent chat messages are always included.</div>
+                    <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_include_card"><span>Character card (description, personality, scenario, note)</span></label>
+                    <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_include_first"><span>Character first message</span></label>
+                    <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_include_extensions"><span>Active extension injections (Ikarus.Doom, trackers, memory, etc.)</span></label>
+                </div>
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_hide_bubble"><span>Hide standalone bubble</span></label>
                 <label>Additional standalone system prompt</label><textarea id="ikarus_standalone_system" class="text_pole textarea_compact" rows="3" placeholder="Optional art direction and image sequencing rules"></textarea>
                 <button id="ikarus_standalone_open" class="menu_button" style="width:100%">Open Standalone Image Studio</button>

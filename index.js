@@ -15,6 +15,7 @@ import {
     extension_prompt_roles,
     extension_prompt_types,
     generateRaw,
+    extension_prompts,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
@@ -60,7 +61,7 @@ const DEFAULT_SETTINGS = {
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
     generationMode: 'together', // 'together' | 'separate' | 'standalone'
-    standalone: { auto: false, contextSize: 5, imageCount: 3, profile: '', systemPrompt: '', libraries: {}, bubbleOpen: false, hideBubble: false },
+    standalone: { auto: false, contextSize: 5, imageCount: 3, profile: '', systemPrompt: '', libraries: {}, bubbleOpen: false, hideBubble: false, includeCharacterCard: false, includeFirstMessage: false, includeExtensionPrompts: false },
     separateProfile: '', // connection profile ID for separate mode (empty = current)
     separateContextSize: 1, // 0 = all AI messages, N = last N AI messages
     separateEnabled: true, // whether separate mode second API call is active
@@ -2153,7 +2154,7 @@ function createStandaloneWindow() {
     <section id="ikarus_standalone_window" class="closed">
       <header id="ikarus_standalone_header"><b>Standalone Image Studio</b><span id="ikarus_standalone_status">Ready</span><button id="ikarus_standalone_minimize" type="button" title="Close to bubble">&times;</button></header>
       <nav class="ikarus-standalone-tabs"><button class="active" data-tab="chat">Assistant</button><button data-tab="gallery">Gallery <span id="ikarus_gallery_badge">0</span></button></nav>
-      <div class="ikarus-standalone-toolbar"><label class="ikarus-auto-label"><input type="checkbox" id="ikarus_window_auto"><span>Auto mode</span></label><label>Profile <select id="ikarus_window_profile"><option value="">Same as Current</option></select></label><label>Context <input type="number" id="ikarus_window_context" min="1" max="999"></label><label>Images <input type="number" id="ikarus_window_count" min="1" max="30"></label><button id="ikarus_standalone_clear">Clear gallery</button></div>
+      <div class="ikarus-standalone-toolbar"><label class="ikarus-auto-label"><input type="checkbox" id="ikarus_window_auto"><span>Auto mode</span></label><label>Profile <select id="ikarus_window_profile"><option value="">Same as Current</option></select></label><label>Context <input type="number" id="ikarus_window_context" min="1" max="999"></label><label>Images <input type="number" id="ikarus_window_count" min="1" max="30"></label><details class="ikarus-context-sources"><summary>Context sources</summary><div><label><input type="checkbox" id="ikarus_window_include_card"> Character card</label><label><input type="checkbox" id="ikarus_window_include_first"> First message</label><label><input type="checkbox" id="ikarus_window_include_extensions"> Extension injections</label></div></details><button id="ikarus_standalone_clear">Clear gallery</button></div>
       <main id="ikarus_standalone_chat_tab" class="ikarus-standalone-tab active"><div class="ikarus-assistant-intro"><h3>Image Assistant</h3><p>Ask for one image or a chronological scene sequence. Story context is added automatically.</p></div><div id="ikarus_standalone_chatlog"></div></main>
       <main id="ikarus_standalone_gallery_tab" class="ikarus-standalone-tab"><div id="ikarus_standalone_gallery"></div></main>
       <div id="ikarus_standalone_progress"></div>
@@ -2179,6 +2180,9 @@ function createStandaloneWindow() {
     $('#ikarus_window_profile').on('change',function(){s().standalone.profile=$(this).val();$('#ikarus_standalone_profile').val(s().standalone.profile);saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_window_context').on('change',function(){s().standalone.contextSize=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
     $('#ikarus_window_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
+    $('#ikarus_window_include_card').on('change',function(){s().standalone.includeCharacterCard=$(this).prop('checked');$('#ikarus_standalone_include_card').prop('checked',s().standalone.includeCharacterCard);saveSettingsDebounced();});
+    $('#ikarus_window_include_first').on('change',function(){s().standalone.includeFirstMessage=$(this).prop('checked');$('#ikarus_standalone_include_first').prop('checked',s().standalone.includeFirstMessage);saveSettingsDebounced();});
+    $('#ikarus_window_include_extensions').on('change',function(){s().standalone.includeExtensionPrompts=$(this).prop('checked');$('#ikarus_standalone_include_extensions').prop('checked',s().standalone.includeExtensionPrompts);saveSettingsDebounced();});
     $('#ikarus_standalone_clear').on('click',()=>{if(confirm('Clear this chat gallery?')){standaloneLibrary().images=[];saveSettingsDebounced();renderStandaloneGallery();}});
     let resizeState=null;
     $('.ikarus-resize-grip').on('pointerdown',function(e){const r=win[0].getBoundingClientRect();resizeState={x:e.clientX,y:e.clientY,w:r.width,h:r.height};this.setPointerCapture(e.pointerId);e.preventDefault();e.stopPropagation();});
@@ -2238,7 +2242,7 @@ function renderStandaloneGallery() {
     if (!$('#ikarus_standalone_window').length) return;
     const st=s().standalone, lib=standaloneLibrary();
     $('#ikarus_gallery_badge').text(lib.images.length); renderStandaloneChat();
-    $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
+    $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); $('#ikarus_window_include_card').prop('checked',!!st.includeCharacterCard); $('#ikarus_window_include_first').prop('checked',!!st.includeFirstMessage); $('#ikarus_window_include_extensions').prop('checked',!!st.includeExtensionPrompts); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
     $('#ikarus_standalone_gallery').html(lib.images.length ? lib.images.map((x,i)=>`<figure data-i="${i}"><button class="ikarus-gallery-image" data-i="${i}" title="Open image viewer"><img src="${esc(x.url)}" loading="lazy"></button><figcaption><span>Image ${i+1}</span><span class="ikarus-gallery-actions"><button class="ikarus-gallery-detach" data-i="${i}" title="Open detached viewer">&#8599;</button><button class="ikarus-gallery-info" data-i="${i}" title="View prompt and metadata">&#9998;</button><button class="ikarus-gallery-delete" data-i="${i}" title="Delete image">&times;</button></span></figcaption></figure>`).join('') : '<div class="ikarus-gallery-empty">This chat has no standalone images yet.</div>');
     $('#ikarus_standalone_gallery .ikarus-gallery-image').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
     $('#ikarus_standalone_gallery .ikarus-gallery-detach').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
@@ -2252,8 +2256,40 @@ function openStandaloneViewer(index,focusMetadata=false){
 function closeStandaloneViewer(){$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
 function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=(_standaloneViewerIndex+delta+images.length)%images.length;openStandaloneViewer(_standaloneViewerIndex);}
 function standaloneContextText() {
-    const c=getContext(), n=Math.max(1,Number(s().standalone.contextSize)||1);
-    return c.chat.filter(m=>m?.mes).slice(-n).map((m,i)=>`Message ${i+1} (${m.is_user?'user':'character'}):\n${m.mes}`).join('\n\n');
+    const ctx = getContext();
+    const st = s().standalone;
+    const n = Math.max(1, Number(st.contextSize) || 1);
+    const sections = [];
+
+    if (st.includeCharacterCard) {
+        const ch = ctx.characters?.[ctx.characterId] || {};
+        const cardParts = [];
+        const add = (label, value) => { if (String(value || '').trim()) cardParts.push(`${label}:\n${value}`); };
+        add('Name', ch.name || ctx.name2);
+        add('Description / appearance', ch.description || ch.data?.description);
+        add('Personality', ch.personality || ch.data?.personality);
+        add('Scenario', ch.scenario || ch.data?.scenario);
+        add("Character's note", ch.system_prompt || ch.data?.system_prompt);
+        if (cardParts.length) sections.push(`CHARACTER CARD:\n${cardParts.join('\n\n')}`);
+    }
+
+    if (st.includeFirstMessage) {
+        const ch = ctx.characters?.[ctx.characterId] || {};
+        const first = ch.first_mes || ch.data?.first_mes || ctx.chat?.find(m => !m.is_user)?.mes || '';
+        if (String(first).trim()) sections.push(`FIRST MESSAGE:\n${first}`);
+    }
+
+    if (st.includeExtensionPrompts) {
+        const injected = Object.entries(extension_prompts || {})
+            .filter(([key, item]) => key !== PROMPT_KEY && String(item?.value || '').trim())
+            .map(([key, item]) => `[${key}]\n${item.value}`);
+        if (injected.length) sections.push(`ACTIVE EXTENSION INJECTIONS:\n${injected.join('\n\n')}`);
+    }
+
+    const recent = (ctx.chat || []).filter(m => m?.mes).slice(-n)
+        .map((m, i) => `Message ${i + 1} (${m.is_user ? 'user' : 'character'}):\n${m.mes}`).join('\n\n');
+    sections.push(`RECENT CHAT (last ${n} messages):\n${recent}`);
+    return sections.join('\n\n=====\n\n');
 }
 async function requestStandalonePrompts(request, auto) {
     const es=s(), st=es.standalone, count=Math.max(1,Number(st.imageCount)||1), context=standaloneContextText();
@@ -2332,6 +2368,9 @@ async function createSettings(html) {
     $('#ikarus_standalone_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_profile').on('change',function(){s().standalone.profile=$(this).val();saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_hide_bubble').on('change',function(){s().standalone.hideBubble=$(this).prop('checked');saveSettingsDebounced();syncStandaloneBubbleVisibility();});
+    $('#ikarus_standalone_include_card').on('change',function(){s().standalone.includeCharacterCard=$(this).prop('checked');$('#ikarus_window_include_card').prop('checked',s().standalone.includeCharacterCard);saveSettingsDebounced();});
+    $('#ikarus_standalone_include_first').on('change',function(){s().standalone.includeFirstMessage=$(this).prop('checked');$('#ikarus_window_include_first').prop('checked',s().standalone.includeFirstMessage);saveSettingsDebounced();});
+    $('#ikarus_standalone_include_extensions').on('change',function(){s().standalone.includeExtensionPrompts=$(this).prop('checked');$('#ikarus_window_include_extensions').prop('checked',s().standalone.includeExtensionPrompts);saveSettingsDebounced();});
     $('#ikarus_standalone_system').on('input',function(){s().standalone.systemPrompt=$(this).val();saveSettingsDebounced();});
     $('#ikarus_standalone_open').on('click',function(){createStandaloneWindow();$('#ikarus_standalone_window').removeClass('closed');});
     $('#ikarus_manual_rescan').on('click', handleManualRescan);
