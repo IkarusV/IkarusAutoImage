@@ -1694,6 +1694,17 @@ function populateProfileDropdown() {
     }
 }
 
+async function sendRequestWithNativeFallback(context, profileId, messages, options, rawPrompt, label) {
+    if (context.ConnectionManagerRequestService?.sendRequest) {
+        try {
+            return await context.ConnectionManagerRequestService.sendRequest(profileId, messages, undefined, options);
+        } catch (error) {
+            console.warn(`[${EXT}] ${label}: Connection Manager unsupported/failed; using generateRaw`, error);
+        }
+    }
+    return await generateRaw(rawPrompt, '', false, false);
+}
+
 async function handleSeparateMode() {
     const es = s();
     if (!es || es.insertType === INSERT_TYPE.DISABLED) return;
@@ -1740,8 +1751,10 @@ async function handleSeparateMode() {
         const st = context;
         if (st.ConnectionManagerRequestService && st.ConnectionManagerRequestService.sendRequest) {
             console.log(`[${EXT}] Separate mode: using ConnectionManagerRequestService (profile=${profileId || '<current>'})`);
-            const createGenerator = await st.ConnectionManagerRequestService.sendRequest(
-                profileId, messages, undefined, { stream: false },
+            const createGenerator = await sendRequestWithNativeFallback(
+                st, profileId, messages, { stream: false }, `${systemPrompt}
+
+${userPrompt}`, 'Separate mode',
             );
             if (typeof createGenerator === 'function') {
                 const generator = createGenerator();
@@ -1906,8 +1919,10 @@ async function handleManualRescan() {
 
                 if (st.ConnectionManagerRequestService && st.ConnectionManagerRequestService.sendRequest) {
                     console.log(`[${EXT}] Manual rescan (separate): using ConnectionManagerRequestService (profile=${profileId || '<current>'})`);
-                    const createGenerator = await st.ConnectionManagerRequestService.sendRequest(
-                        profileId, messages, undefined, { stream: false },
+                    const createGenerator = await sendRequestWithNativeFallback(
+                        st, profileId, messages, { stream: false }, `${systemPrompt}
+
+${userPrompt}`, 'Manual rescan',
                     );
                     if (typeof createGenerator === 'function') {
                         const generator = createGenerator();
@@ -2298,7 +2313,9 @@ async function requestStandalonePrompts(request, auto) {
     const user=`${auto?'Automatically create a chronological image sequence from the new story activity.':request||`Create ${count} images from this story context.`}\n\nSTORY CONTEXT:\n${context}`;
     const messages=[{role:'system',content:system},{role:'user',content:user}], ctx=getContext(), profile=st.profile||es.separateProfile||'';
     if (ctx.ConnectionManagerRequestService?.sendRequest) {
-        const cg=await ctx.ConnectionManagerRequestService.sendRequest(profile,messages,undefined,{stream:true}); let out='';
+        const cg=await sendRequestWithNativeFallback(ctx,profile,messages,{stream:true},`${system}
+
+${user}`,'Standalone'); let out='';
         if(typeof cg==='function'){ _standaloneGenerator=cg(); for await(const chunk of _standaloneGenerator){ if(_standaloneCancelled) break; if(chunk?.text!==undefined){out=chunk.text; $('#ikarus_standalone_progress').text('Planning prompts...');} } }
         else out=cg?.content||cg?.text||String(cg||'');
         return out;
