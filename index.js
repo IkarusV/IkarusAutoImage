@@ -45,6 +45,7 @@ const DEFAULT_SETTINGS = {
     // Per-character prompt: keyed by charId → string
     charPrompts: {},
     charPrefixes: {},
+    charPrefixesEnabled: true,
     // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, caption, replaceMode, priority, parentId, enabled, folder}
     replacements: [],
     repFieldMode: 'tags', // 'tags' or 'caption' — which field to use during replacement
@@ -169,6 +170,7 @@ function ensureSettings() {
     if (es.activePresetId === undefined) es.activePresetId = '';
     if (!es.charPrompts || typeof es.charPrompts !== 'object') es.charPrompts = {};
     if (!es.charPrefixes || typeof es.charPrefixes !== 'object') es.charPrefixes = {};
+    if (es.charPrefixesEnabled === undefined) es.charPrefixesEnabled = true;
     if (!Array.isArray(es.replacements)) es.replacements = [];
     if (!Array.isArray(es.repFolders)) es.repFolders = [];
     if (!Array.isArray(es.repCategories)) es.repCategories = [];
@@ -220,6 +222,8 @@ function updateUI() {
         $('#ikarus_auto_clean').prop('checked', es.autoClean);
         $('#ikarus_auto_fix_pic').prop('checked', es.autoFixPicFormat);
         $('#ikarus_filter_native_sd').prop('checked', es.filterNativeSd);
+        $('#ikarus_char_prefix_enabled').prop('checked', es.charPrefixesEnabled !== false);
+        $('#ikarus_char_prefix').prop('disabled', es.charPrefixesEnabled === false);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
@@ -361,6 +365,7 @@ function getCharPromptText() {
 let _loadedCharPrefixId = null;
 
 function getCharPrefix() {
+    if (s().charPrefixesEnabled === false) return '';
     const charId = getCurrentCharId();
     // The UI-loaded identity acts as a switch barrier. If SillyTavern's context is
     // still changing, an old card prefix is safer to omit than to leak.
@@ -2433,6 +2438,12 @@ async function createSettings(html) {
     });
 
     // Character Prefix (per-card)
+    $('#ikarus_char_prefix_enabled').on('change', function () {
+        s().charPrefixesEnabled = $(this).prop('checked');
+        $('#ikarus_char_prefix').prop('disabled', !s().charPrefixesEnabled);
+        saveSettingsDebounced();
+        toastr.info(`Character prefixes ${s().charPrefixesEnabled ? 'enabled' : 'disabled'}`);
+    });
     $('#ikarus_char_prefix').on('input', function () { saveCharPrefix(); });
 
     // Section 3: Replacements
