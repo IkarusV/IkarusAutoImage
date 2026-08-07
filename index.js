@@ -1405,6 +1405,32 @@ function joinPrompt(base, addition) {
     if (!b) return a; if (!a) return b; return `${b}, ${a}`;
 }
 
+// Fail-closed cleanup for prompts that were assembled or cached before the
+// character-prefix master switch was disabled. Only strips exact configured
+// prefixes at the beginning, so identical text elsewhere in a prompt is kept.
+function stripConfiguredCharPrefixes(prompt) {
+    let result = String(prompt || '');
+    const prefixes = Object.values(s().charPrefixes || {})
+        .filter(value => typeof value === 'string' && value.trim())
+        .map(value => value.trim())
+        .sort((a, b) => b.length - a.length);
+
+    let removed = false;
+    let changed = true;
+    while (changed) {
+        changed = false;
+        const leftTrimmed = result.trimStart();
+        for (const prefix of prefixes) {
+            if (!leftTrimmed.startsWith(prefix)) continue;
+            result = leftTrimmed.slice(prefix.length).replace(/^\s*,?\s*/, '');
+            removed = changed = true;
+            break;
+        }
+    }
+    if (removed) console.warn(`[${EXT}] Removed configured character prefix while prefixes are disabled`);
+    return result;
+}
+
 // ==========================================================================
 // MASTER PROCESSING PIPELINE
 // ==========================================================================
@@ -1412,6 +1438,10 @@ function processPrompt(prompt, negative) {
     const es = s();
     let p = String(prompt || '');
     let n = String(negative || '');
+
+    // Enforce the master switch on the incoming prompt too. This covers stale
+    // queued prompts and every generation route that calls this pipeline.
+    if (es.charPrefixesEnabled === false) p = stripConfiguredCharPrefixes(p);
 
     const prefix = getCharPrefix();
     if (prefix) {
@@ -2015,6 +2045,8 @@ ${userPrompt}`, 'Manual rescan',
 
                 const processed = processPrompt(imgPrompt, '');
                 imgPrompt = processed.prompt;
+                if (s().charPrefixesEnabled === false) imgPrompt = stripConfiguredCharPrefixes(imgPrompt);
+                console.log(`[${EXT}] Final /sd prompt (prefixes=${s().charPrefixesEnabled !== false ? 'on' : 'off'}):`, imgPrompt);
                 markProcessedSdPrompt(imgPrompt);
 
                 const sdResult = await SlashCommandParser.commands['sd'].callback(
@@ -2124,6 +2156,8 @@ async function handleIncomingMessage() {
                 // Run the full processing pipeline
                 const processed = processPrompt(imgPrompt, '');
                 imgPrompt = processed.prompt;
+                if (s().charPrefixesEnabled === false) imgPrompt = stripConfiguredCharPrefixes(imgPrompt);
+                console.log(`[${EXT}] Final /sd prompt (prefixes=${s().charPrefixesEnabled !== false ? 'on' : 'off'}):`, imgPrompt);
                 markProcessedSdPrompt(imgPrompt);
 
                 const result = await SlashCommandParser.commands['sd'].callback(
