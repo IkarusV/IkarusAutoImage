@@ -82,11 +82,8 @@ function getCurrentCharId() {
         const c = getContext();
         if (c.groupId) return `group_${c.groupId}`;
         if (c.characterId != null && c.characters?.[c.characterId]) {
-            const character = c.characters[c.characterId];
-            // During a card/chat switch, name2 and characterId can update on different
-            // ticks. Never use the old card's avatar key in that transition window.
-            if (c.name2 && character.name && c.name2 !== character.name) return null;
-            const avatar = character.avatar;
+            // Use avatar filename as stable key (e.g. "judy_hopps.png")
+            const avatar = c.characters[c.characterId].avatar;
             if (avatar) return `avatar_${avatar}`;
         }
     } catch { }
@@ -358,13 +355,9 @@ function getCharPromptText() {
     return data.slots[data.active || 0] || '';
 }
 
-let _loadedCharPrefixId = null;
-
 function getCharPrefix() {
     const charId = getCurrentCharId();
-    // The UI-loaded identity acts as a switch barrier. If SillyTavern's context is
-    // still changing, an old card prefix is safer to omit than to leak.
-    if (!charId || _loadedCharPrefixId !== charId) return '';
+    if (!charId) return '';
     return s().charPrefixes[charId] || '';
 }
 
@@ -373,13 +366,11 @@ function loadCharPrefix() {
     if (!$textarea.length) return;
     const charId = getCurrentCharId();
     if (!charId) {
-        _loadedCharPrefixId = null;
         $textarea.val('').attr('placeholder', 'Select a character first...');
         $('#ikarus_char_prefix_label').text('Char Prefix (no character)');
         return;
     }
     const charName = getCurrentCharName();
-    _loadedCharPrefixId = charId;
     $textarea.val(s().charPrefixes[charId] || '').attr('placeholder', `Prefix for ${charName}... (e.g. <lora:naruto:0.8>)`);
     $('#ikarus_char_prefix_label').text(`Char Prefix — ${charName}`);
 }
@@ -1603,8 +1594,6 @@ if (event_types.SD_PROMPT_PROCESSING) {
 // ==========================================================================
 eventSource.on(event_types.CHAT_CHANGED, function () {
     _isAwaitingNewMessage = false;
-    _loadedCharPrefixId = null;
-    $('#ikarus_char_prefix').val('').attr('placeholder', 'Loading character prefix...');
     console.log(`[${EXT}] Chat changed — refreshing character-specific UI`);
     migrateCharKeys();
     loadCharPrompt();
@@ -1626,10 +1615,6 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
     renderReplacementList();
     renderFilterList();
     renderStandaloneGallery();
-    setTimeout(() => {
-        migrateCharKeys(); loadCharPrompt(); loadCharPrefix(); syncPromptInjection();
-        renderReplacementList(); renderFilterList();
-    }, 150);
 });
 
 // ==========================================================================
