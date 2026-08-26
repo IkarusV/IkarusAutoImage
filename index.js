@@ -424,6 +424,11 @@ function renderReplacementList() {
     container.html(html);
 }
 
+function normalizeReplacementTriggerGroups(r) { if (Array.isArray(r?.triggerGroups) && r.triggerGroups.length) return r.triggerGroups.map((g,i)=>({ trigger:String(g?.trigger||'').trim(), matchMode:['OR','AND','XOR','NOR','CHILD'].includes(g?.matchMode) && (g.matchMode!=='CHILD'||i===0) ? g.matchMode : 'OR' })).filter(g=>g.trigger); const trigger=String(r?.trigger||'').trim(); return trigger ? [{trigger,matchMode:r?.matchMode||'OR'}] : []; }
+function renderReplacementTriggerGroups(groups=[{trigger:'',matchMode:'OR'}]) { const rows=groups.length?groups:[{trigger:'',matchMode:'OR'}], isChild=!!(_addChildParentId||$('#ikarus_rep_add').data('parent-id')); $('#ikarus_rep_trigger_groups').html(rows.map((g,i)=>`<div class="ikarus-trigger-group"><input class="text_pole ikarus-rep-group-trigger" value="${esc(g.trigger||'')}" placeholder="e.g. Alice"><select class="text_pole ikarus-rep-group-mode"><option value="OR" ${g.matchMode==='OR'?'selected':''}>OR (any)</option><option value="AND" ${g.matchMode==='AND'?'selected':''}>AND (all)</option><option value="XOR" ${g.matchMode==='XOR'?'selected':''}>XOR (exactly one)</option><option value="NOR" ${g.matchMode==='NOR'?'selected':''}>NOR (none)</option>${i===0&&isChild?`<option value="CHILD" ${g.matchMode==='CHILD'?'selected':''}>CHILD (parent must fire)</option>`:''}</select>${i?'<button type="button" class="menu_button ikarus-trigger-group-remove">&times;</button>':''}</div>`).join('')); }
+function readReplacementTriggerGroups(){ return $('#ikarus_rep_trigger_groups .ikarus-trigger-group').map(function(){return {trigger:$(this).find('.ikarus-rep-group-trigger').val()?.trim()||'',matchMode:$(this).find('.ikarus-rep-group-mode').val()||'OR'};}).get().filter(g=>g.trigger); }
+function replacementTriggerGroupsLabel(r){return normalizeReplacementTriggerGroups(r).map(g=>`${g.trigger} (${g.matchMode})`).join(' AND ');}
+
 function renderRepCard(r, isChild) {
     const indent = isChild ? 'style="margin-left:20px;border-left:3px solid var(--SmartThemeQuoteColor,#e0a0ff);"' : '';
     const prefix = isChild ? '↳ ' : '';
@@ -443,7 +448,7 @@ function renderRepCard(r, isChild) {
             </div>
         </div>
         <div class="card-details">
-            <div><b class="trigger-label">Find:</b> ${esc(r.trigger)} <em>(${r.matchMode || 'OR'})</em></div>
+            <div><b class="trigger-label">Find:</b> ${esc(replacementTriggerGroupsLabel(r))}</div>
             <div><b class="replace-label">🏷️</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? '…' : ''}</div>
             ${r.caption && r.caption !== r.replacement ? `<div><b class="replace-label">💬</b> ${esc((r.caption || '').substring(0, 100))}${(r.caption || '').length > 100 ? '…' : ''}</div>` : ''}
             ${r.replaceMode === 'first_full' && r.shortTag ? `<div><b class="replace-label">🔁</b> ${esc((r.shortTag || '').substring(0, 80))}${(r.shortTag || '').length > 80 ? '…' : ''}</div>` : ''}
@@ -454,12 +459,13 @@ function renderRepCard(r, isChild) {
 
 function addReplacement(parentId) {
     const name = $('#ikarus_rep_name').val()?.trim();
-    const trigger = $('#ikarus_rep_trigger').val()?.trim();
+    const triggerGroups = readReplacementTriggerGroups();
+    const trigger = triggerGroups[0]?.trigger || '';
     const replacement = $('#ikarus_rep_replacement').val()?.trim();
     const caption = $('#ikarus_rep_caption').val()?.trim() || replacement;
     const krea2 = $('#ikarus_rep_krea2').val()?.trim() || caption || replacement;
     const shortTag = $('#ikarus_rep_short_tag').val()?.trim();
-    const matchMode = $('#ikarus_rep_match').val() || 'OR';
+    const matchMode = triggerGroups[0]?.matchMode || 'OR';
     const replaceMode = $('#ikarus_rep_mode').val() || 'first';
     const priority = parseInt($('#ikarus_rep_priority').val()) || 0;
 
@@ -469,20 +475,21 @@ function addReplacement(parentId) {
     s().replacements.push({
         id: uid(), name: name || trigger, scope: currentRepScope,
         charId: currentRepScope === 'char' ? getCurrentCharId() : null,
-        trigger, matchMode, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement,
+        trigger, matchMode, triggerGroups, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement,
         shortTag: shortTag || '',
         replaceMode, priority,
         parentId: parentId || null, enabled: true,
     });
     saveSettingsDebounced(); renderReplacementList();
-    $('#ikarus_rep_name, #ikarus_rep_trigger, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
+    $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
+    renderReplacementTriggerGroups();
     $('#ikarus_rep_priority').val('0');
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
 
 function editReplacement(id) {
     const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
-    $('#ikarus_rep_name').val(r.name); $('#ikarus_rep_trigger').val(r.trigger);
+    $('#ikarus_rep_name').val(r.name); renderReplacementTriggerGroups(normalizeReplacementTriggerGroups(r));
     $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || ''); $('#ikarus_rep_krea2').val(r.krea2 || '');
     $('#ikarus_rep_short_tag').val(r.shortTag || '');
     $('#ikarus_rep_match').val(r.matchMode || 'OR');
@@ -500,6 +507,11 @@ function editReplacement(id) {
 // ==========================================================================
 // Filters — trigger-based with remove/append/replace actions
 // ==========================================================================
+function normalizeFilterTriggerGroups(f){if(Array.isArray(f?.triggerGroups)&&f.triggerGroups.length)return f.triggerGroups.map(g=>({trigger:String(g?.trigger||'').trim(),matchMode:['OR','AND','XOR','NOR'].includes(g?.matchMode)?g.matchMode:'OR'})).filter(g=>g.trigger);const t=String(f?.trigger||'').trim();return t?[{trigger:t,matchMode:f?.matchMode==='AND'?'AND':'OR'}]:[];}
+function renderFilterTriggerGroups(groups=[{trigger:'',matchMode:'OR'}]){const rows=groups.length?groups:[{trigger:'',matchMode:'OR'}];$('#ikarus_flt_trigger_groups').html(rows.map((g,i)=>`<div class="ikarus-trigger-group"><input class="text_pole ikarus-flt-group-trigger" value="${esc(g.trigger||'')}" placeholder="e.g. hat, shirt"><select class="text_pole ikarus-flt-group-mode"><option value="OR" ${g.matchMode==='OR'?'selected':''}>OR (any)</option><option value="AND" ${g.matchMode==='AND'?'selected':''}>AND (all)</option><option value="XOR" ${g.matchMode==='XOR'?'selected':''}>XOR (exactly one)</option><option value="NOR" ${g.matchMode==='NOR'?'selected':''}>NOR (none)</option></select>${i?'<button type="button" class="menu_button ikarus-trigger-group-remove">&times;</button>':''}</div>`).join(''));}
+function readFilterTriggerGroups(){return $('#ikarus_flt_trigger_groups .ikarus-trigger-group').map(function(){return{trigger:$(this).find('.ikarus-flt-group-trigger').val()?.trim()||'',matchMode:$(this).find('.ikarus-flt-group-mode').val()||'OR'};}).get().filter(g=>g.trigger);}
+function filterTriggerGroupsLabel(f){return normalizeFilterTriggerGroups(f).map(g=>`${g.trigger} (${g.matchMode})`).join(' AND ');}
+
 function renderFilterList() {
     const container = $('#ikarus_filter_list');
     if (!container.length) return;
@@ -522,7 +534,7 @@ function renderFilterList() {
                 </div>
             </div>
             <div class="card-details">
-                <div><b class="trigger-label">When:</b> ${esc(f.trigger)} <em>(${f.matchMode || 'OR'})</em></div>
+                <div><b class="trigger-label">When:</b> ${esc(filterTriggerGroupsLabel(f))}</div>
                 <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? '✂ Remove:' : f.action === 'append' ? '+ Append:' : '⇄ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
                 ${f.action === 'replace' ? `<div><b class="replace-label">→</b> ${esc((f.actionText || '').substring(0, 80))}</div>` : ''}
                 <div>Target: ${f.target || 'positive'} | <span class="scope-badge">${f.scope === 'char' ? '👤' : '🌐'}</span></div>
@@ -533,8 +545,9 @@ function renderFilterList() {
 
 function addFilter() {
     const name = $('#ikarus_flt_name').val()?.trim();
-    const trigger = $('#ikarus_flt_trigger').val()?.trim();
-    const matchMode = $('#ikarus_flt_match').val() || 'OR';
+    const triggerGroups = readFilterTriggerGroups();
+    const trigger = triggerGroups[0]?.trigger || '';
+    const matchMode = triggerGroups[0]?.matchMode || 'OR';
     const action = $('#ikarus_flt_action').val() || 'remove';
     const actionText = $('#ikarus_flt_action_text').val()?.trim();
     const findText = $('#ikarus_flt_find_text').val()?.trim();
@@ -548,17 +561,18 @@ function addFilter() {
     s().filters.push({
         id: uid(), name: name || trigger, scope: currentFltScope,
         charId: currentFltScope === 'char' ? getCurrentCharId() : null,
-        trigger, matchMode, action, actionText: actionText || '', findText: findText || '', target, enabled: true,
+        trigger, matchMode, triggerGroups, action, actionText: actionText || '', findText: findText || '', target, enabled: true,
     });
     saveSettingsDebounced(); renderFilterList();
-    $('#ikarus_flt_name, #ikarus_flt_trigger, #ikarus_flt_action_text, #ikarus_flt_find_text').val('');
+    $('#ikarus_flt_name, #ikarus_flt_action_text, #ikarus_flt_find_text').val('');
+    renderFilterTriggerGroups();
     toastr.success(`Filter "${name || trigger}" added`);
 }
 
 function editFilter(id) {
     const es = s(); const f = es.filters.find(x => x.id === id); if (!f) return;
-    $('#ikarus_flt_name').val(f.name); $('#ikarus_flt_trigger').val(f.trigger);
-    $('#ikarus_flt_match').val(f.matchMode || 'OR'); $('#ikarus_flt_action').val(f.action || 'remove');
+    $('#ikarus_flt_name').val(f.name); renderFilterTriggerGroups(normalizeFilterTriggerGroups(f));
+    $('#ikarus_flt_action').val(f.action || 'remove');
     $('#ikarus_flt_action_text').val(f.actionText || ''); $('#ikarus_flt_find_text').val(f.findText || '');
     $('#ikarus_flt_target').val(f.target || 'positive');
     updateFilterFormVisibility();
@@ -1221,6 +1235,7 @@ function applyReplacements(text) {
         if (mode === 'CHILD') {
             // CHILD mode: only fire if parent fired
             if (!firedParents.has(child.parentId)) continue;
+            if (!replacementConditionsMatch(result, child)) continue;
 
             // Check if this child's trigger words conflict with an already-claimed keyword
             const keywords = child.trigger.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
@@ -1250,14 +1265,9 @@ function applyReplacements(text) {
     return result;
 }
 
-function triggerMatches(text, rule) {
-    const keywords = rule.trigger.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-    if (!keywords.length) return false;
-    const lower = text.toLowerCase();
-    if (rule.matchMode === 'AND') return keywords.every(kw => lower.includes(kw));
-    // OR is default for parents; CHILD mode is handled separately in applyReplacements
-    return keywords.some(kw => lower.includes(kw));
-}
+function triggerGroupMatches(lower,g){const w=String(g.trigger||'').split(',').map(k=>k.trim().toLowerCase()).filter(Boolean);if(!w.length)return false;const c=w.filter(x=>lower.includes(x)).length;if(g.matchMode==='AND')return c===w.length;if(g.matchMode==='XOR')return c===1;if(g.matchMode==='NOR')return c===0;return c>0;}
+function triggerMatches(text,rule){const lower=String(text||'').toLowerCase();const groups=Array.isArray(rule?.triggerGroups)&&rule.triggerGroups.length?(s().replacements||[]).includes(rule)?normalizeReplacementTriggerGroups(rule):normalizeFilterTriggerGroups(rule):[{trigger:rule?.trigger,matchMode:rule?.matchMode||'OR'}];return groups.every((g,i)=>g.matchMode==='CHILD'&&i===0?true:triggerGroupMatches(lower,g));}
+function replacementConditionsMatch(text,rule){return normalizeReplacementTriggerGroups(rule).slice(1).every(g=>triggerGroupMatches(String(text||'').toLowerCase(),g));}
 
 function doReplace(text, rule) {
     const keywords = rule.trigger.split(',').map(k => k.trim()).filter(Boolean);
@@ -2301,15 +2311,15 @@ function standaloneContextText() {
         if (injected.length) sections.push(`ACTIVE EXTENSION INJECTIONS:\n${injected.join('\n\n')}`);
     }
 
-    const recent = (ctx.chat || []).filter(m => m?.mes).slice(-n)
-        .map((m, i) => `Message ${i + 1} (${m.is_user ? 'user' : 'character'}):\n${m.mes}`).join('\n\n');
-    sections.push(`RECENT CHAT (last ${n} messages):\n${recent}`);
+    const recentMessages=(ctx.chat||[]).filter(m=>m?.mes).slice(-n);
+    const recent=recentMessages.map((m,i)=>`${i===recentMessages.length-1?'LATEST MESSAGE - PRIMARY IMAGE SOURCE':'CONTEXT ONLY'} | Message ${i+1} (${m.is_user?'user':'character'}):\n${m.mes}`).join('\n\n');
+    sections.push(`RECENT CHAT (last ${n} messages):\n\nIMPORTANT: THE LATEST MESSAGE IS THE ONLY PRIMARY SOURCE FOR NEW IMAGES. EVERYTHING BEFORE IT IS CONTEXT ONLY, used solely for narrative, appearance, location, and continuity consistency. Do not create images for events found only in earlier messages.\n\n${recent}`);
     return sections.join('\n\n=====\n\n');
 }
 async function requestStandalonePrompts(request, auto) {
     const es=s(), st=es.standalone, count=Math.max(1,Number(st.imageCount)||1), context=standaloneContextText();
     const base=getPromptInjectionText().promptText;
-    const system=`${base}\n\n${st.systemPrompt||''}\nYou are a standalone image director. Never roleplay and never rewrite the source messages. Return only ${count} chronological image prompts, each exactly in [pic prompt="..."] format. Each image must depict a distinct visual beat and progress the scene in source order.`;
+    const system=`${base}\n\n${st.systemPrompt||''}\nYou are a standalone image director. Never roleplay and never rewrite the source messages. Return only ${count} chronological image prompts, each exactly in [pic prompt="..."] format. Each image must depict a distinct visual beat from the LATEST MESSAGE only. Earlier messages are context only and must never become image subjects. Progress through visual beats in the latest message source order.`;
     const user=`${auto?'Automatically create a chronological image sequence from the new story activity.':request||`Create ${count} images from this story context.`}\n\nSTORY CONTEXT:\n${context}`;
     const messages=[{role:'system',content:system},{role:'user',content:user}], ctx=getContext(), profile=st.profile||es.separateProfile||'';
     if (ctx.ConnectionManagerRequestService?.sendRequest) {
@@ -2421,6 +2431,17 @@ async function createSettings(html) {
     $('#ikarus_char_prefix').on('input', function () { saveCharPrefix(); });
 
     // Section 3: Replacements
+    // Render the mandatory first trigger row before any replacement can be saved.
+    renderReplacementTriggerGroups();
+    $('#ikarus_rep_add_group').on('click', function () {
+        const groups = readReplacementTriggerGroups();
+        groups.push({ trigger: '', matchMode: 'OR' });
+        renderReplacementTriggerGroups(groups);
+        $('#ikarus_rep_trigger_groups .ikarus-trigger-group:last input').trigger('focus');
+    });
+    $('#ikarus_rep_trigger_groups').on('click', '.ikarus-trigger-group-remove', function () {
+        $(this).closest('.ikarus-trigger-group').remove();
+    });
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
     $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderReplacementList(); });
     $('#ikarus_rep_add').on('click', function () {
@@ -2437,7 +2458,10 @@ async function createSettings(html) {
     // Section 4: Filters
     $('#ikarus_flt_scope_global').on('click', function () { currentFltScope = 'global'; $(this).addClass('active'); $('#ikarus_flt_scope_char').removeClass('active'); renderFilterList(); });
     $('#ikarus_flt_scope_char').on('click', function () { currentFltScope = 'char'; $(this).addClass('active'); $('#ikarus_flt_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderFilterList(); });
+    renderFilterTriggerGroups();
     $('#ikarus_flt_add').on('click', addFilter);
+    $('#ikarus_flt_add_group').on('click',function(){const g=readFilterTriggerGroups();g.push({trigger:'',matchMode:'OR'});renderFilterTriggerGroups(g);$('#ikarus_flt_trigger_groups .ikarus-trigger-group:last input').trigger('focus');});
+    $('#ikarus_flt_trigger_groups').on('click','.ikarus-trigger-group-remove',function(){$(this).closest('.ikarus-trigger-group').remove();});
     $('#ikarus_flt_action').on('change', updateFilterFormVisibility);
 
     // Section 5: Processing & Cleaners

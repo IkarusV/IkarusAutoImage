@@ -158,8 +158,10 @@
                     Add Replacement</div>
                 <label>Name</label>
                 <input id="ikarus_rep_name" type="text" class="text_pole" placeholder="e.g. Sakura Tags">
-                <label>Find (trigger words, comma-separated)</label>
-                <input id="ikarus_rep_trigger" type="text" class="text_pole" placeholder="e.g. sakura, haruno sakura">
+                <label>Trigger groups</label>
+                <div id="ikarus_rep_trigger_groups" class="ikarus-trigger-groups"></div>
+                <button id="ikarus_rep_add_group" type="button" class="menu_button ikarus-add-trigger-group">+ Add trigger group</button>
+                <div class="ikarus-hint">The first group contains replacement targets. Additional groups are AND conditions supporting OR, AND, XOR, and NOR.</div>
                 <label>Tags 🏷️ (danbooru-style replacement)</label>
                 <textarea id="ikarus_rep_replacement" class="text_pole textarea_compact" rows="2"
                     placeholder="e.g. 1girl, pink_hair, green_eyes, <lora:sakura:0.8>"></textarea>
@@ -170,14 +172,6 @@
                 <textarea id="ikarus_rep_krea2" class="text_pole textarea_compact" rows="2"
                     placeholder="Krea 2-specific prompt text (optional; falls back to Caption/Tags)"></textarea>
                 <div class="ikarus-row">
-                    <div>
-                        <label>Match</label>
-                        <select id="ikarus_rep_match" class="text_pole">
-                            <option value="OR">OR (any word)</option>
-                            <option value="AND">AND (all words)</option>
-                            <option value="CHILD">CHILD (only if parent fires)</option>
-                        </select>
-                    </div>
                     <div>
                         <label>Mode</label>
                         <select id="ikarus_rep_mode" class="text_pole">
@@ -219,16 +213,11 @@
                     Add Filter</div>
                 <label>Name</label>
                 <input id="ikarus_flt_name" type="text" class="text_pole" placeholder="e.g. Beach Night Mood">
-                <label>Trigger words (comma-separated)</label>
-                <input id="ikarus_flt_trigger" type="text" class="text_pole" placeholder="e.g. beach, night">
+                <label>Trigger groups</label>
+                <div id="ikarus_flt_trigger_groups" class="ikarus-trigger-groups"></div>
+                <button id="ikarus_flt_add_group" type="button" class="menu_button ikarus-add-trigger-group">+ Add trigger group</button>
+                <div class="ikarus-hint">All groups are combined with AND. Within each group choose OR (any), AND (all), XOR (exactly one), or NOR (none).</div>
                 <div class="ikarus-row">
-                    <div>
-                        <label>Match</label>
-                        <select id="ikarus_flt_match" class="text_pole">
-                            <option value="OR">OR (any word)</option>
-                            <option value="AND">AND (all words)</option>
-                        </select>
-                    </div>
                     <div>
                         <label>Action</label>
                         <select id="ikarus_flt_action" class="text_pole">
