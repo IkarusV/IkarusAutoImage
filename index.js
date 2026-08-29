@@ -1,5 +1,5 @@
 // ==========================================================================
-// IkarusAutoImage — SillyTavern Extension
+// IkarusAutoImage â€” SillyTavern Extension
 // Auto-image generation with presets, replacements (with children hierarchy),
 // filters (remove/append/replace), double cleaner, and auto-cleaner.
 // Uses SillyTavern's native /sd command for generation.
@@ -42,15 +42,15 @@ const DEFAULT_SETTINGS = {
     promptInjection: { enabled: true, prompt: DEFAULT_PROMPT, regex: DEFAULT_REGEX, position: 'deep_system', depth: 0 },
     presets: [],
     activePresetId: '', // currently selected preset ID
-    // Per-character prompt: keyed by charId → string
+    // Per-character prompt: keyed by charId â†’ string
     charPrompts: {},
     charPrefixes: {},
     // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, caption, replaceMode, priority, parentId, enabled, folder}
     replacements: [],
-    repFieldMode: 'tags', // 'tags' or 'caption' — which field to use during replacement
+    repFieldMode: 'tags', // 'tags' or 'caption' â€” which field to use during replacement
     repFolders: [], // folder names for organizing global replacements
     repCategories: [], // category names (parent of folders)
-    folderCategories: {}, // mapping: folder name → category name
+    folderCategories: {}, // mapping: folder name â†’ category name
     // Filters: {id, name, scope, charId, trigger, matchMode, action, actionText, findText, target, enabled}
     filters: [],
     replacementsEnabled: true, // master switch; preserves each rule's enabled state
@@ -103,7 +103,7 @@ function migrateCharKeys() {
         if (!ctx.characters?.length) return;
         let migrated = 0;
 
-        // Build mapping: old key "char_N" → new key "avatar_filename.png"
+        // Build mapping: old key "char_N" â†’ new key "avatar_filename.png"
         const keyMap = {};
         for (let i = 0; i < ctx.characters.length; i++) {
             const av = ctx.characters[i]?.avatar;
@@ -219,6 +219,7 @@ function updateUI() {
         $('#ikarus_auto_clean').prop('checked', es.autoClean);
         $('#ikarus_auto_fix_pic').prop('checked', es.autoFixPicFormat);
         $('#ikarus_filter_native_sd').prop('checked', es.filterNativeSd);
+        $('#ikarus_filter_imagine').prop('checked', es.filterImagine);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
@@ -374,7 +375,7 @@ function loadCharPrefix() {
     }
     const charName = getCurrentCharName();
     $textarea.val(s().charPrefixes[charId] || '').attr('placeholder', `Prefix for ${charName}... (e.g. <lora:naruto:0.8>)`);
-    $('#ikarus_char_prefix_label').text(`Char Prefix — ${charName}`);
+    $('#ikarus_char_prefix_label').text(`Char Prefix â€” ${charName}`);
 }
 
 function saveCharPrefix() {
@@ -400,7 +401,7 @@ function activeItems(list) {
 }
 
 // ==========================================================================
-// Replacements — with children, AND/OR, priority
+// Replacements â€” with children, AND/OR, priority
 // ==========================================================================
 function getParentReplacements(scope) {
     return itemsForScope(s().replacements || [], scope).filter(r => !r.parentId);
@@ -433,28 +434,28 @@ function replacementTriggerGroupsLabel(r){return normalizeReplacementTriggerGrou
 
 function renderRepCard(r, isChild) {
     const indent = isChild ? 'style="margin-left:20px;border-left:3px solid var(--SmartThemeQuoteColor,#e0a0ff);"' : '';
-    const prefix = isChild ? '↳ ' : '';
+    const prefix = isChild ? 'â†³ ' : '';
     const transferBtn = r.scope === 'global'
-        ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">📥</button>`
-        : `<button class="menu_button ikarus-transfer-item" title="Move to global">📤</button>`;
+        ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">ðŸ“¥</button>`
+        : `<button class="menu_button ikarus-transfer-item" title="Move to global">ðŸ“¤</button>`;
     return `
     <div class="ikarus-card ${r.enabled ? '' : 'disabled'}" data-id="${esc(r.id)}" data-type="replacement" ${indent}>
         <div class="card-header">
             <span class="card-name">${prefix}${esc(r.name || 'Unnamed')}</span>
             <div class="card-actions">
-                ${!isChild ? `<button class="menu_button ikarus-add-child" title="Add child">👶</button>` : ''}
+                ${!isChild ? `<button class="menu_button ikarus-add-child" title="Add child">ðŸ‘¶</button>` : ''}
                 ${!isChild ? transferBtn : ''}
-                <button class="menu_button ikarus-toggle-item" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? '✅' : '⬜'}</button>
-                <button class="menu_button ikarus-edit-item" title="Edit">✏️</button>
-                <button class="menu_button ikarus-delete-item" title="Delete">🗑️</button>
+                <button class="menu_button ikarus-toggle-item" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? 'âœ…' : 'â¬œ'}</button>
+                <button class="menu_button ikarus-edit-item" title="Edit">âœï¸</button>
+                <button class="menu_button ikarus-delete-item" title="Delete">ðŸ—‘ï¸</button>
             </div>
         </div>
         <div class="card-details">
             <div><b class="trigger-label">Find:</b> ${esc(replacementTriggerGroupsLabel(r))}</div>
-            <div><b class="replace-label">🏷️</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? '…' : ''}</div>
-            ${r.caption && r.caption !== r.replacement ? `<div><b class="replace-label">💬</b> ${esc((r.caption || '').substring(0, 100))}${(r.caption || '').length > 100 ? '…' : ''}</div>` : ''}
-            ${r.replaceMode === 'first_full' && r.shortTag ? `<div><b class="replace-label">🔁</b> ${esc((r.shortTag || '').substring(0, 80))}${(r.shortTag || '').length > 80 ? '…' : ''}</div>` : ''}
-            <div>Mode: ${r.replaceMode === 'all' ? 'All' : r.replaceMode === 'first_full' ? '1st Full' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? '👤' : '🌐'}</span>${r.folder ? ` | 📁 ${esc(r.folder)}` : ''} | ${s().repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
+            <div><b class="replace-label">ðŸ·ï¸</b> ${esc((r.replacement || '').substring(0, 100))}${(r.replacement || '').length > 100 ? 'â€¦' : ''}</div>
+            ${r.caption && r.caption !== r.replacement ? `<div><b class="replace-label">ðŸ’¬</b> ${esc((r.caption || '').substring(0, 100))}${(r.caption || '').length > 100 ? 'â€¦' : ''}</div>` : ''}
+            ${r.replaceMode === 'first_full' && r.shortTag ? `<div><b class="replace-label">ðŸ”</b> ${esc((r.shortTag || '').substring(0, 80))}${(r.shortTag || '').length > 80 ? 'â€¦' : ''}</div>` : ''}
+            <div>Mode: ${r.replaceMode === 'all' ? 'All' : r.replaceMode === 'first_full' ? '1st Full' : 'First'} | P${r.priority || 0} | <span class="scope-badge">${r.scope === 'char' ? 'ðŸ‘¤' : 'ðŸŒ'}</span>${r.folder ? ` | ðŸ“ ${esc(r.folder)}` : ''} | ${s().repFieldMode === 'caption' ? 'ðŸ’¬' : 'ðŸ·ï¸'}</div>
         </div>
     </div>`;
 }
@@ -503,11 +504,11 @@ function editReplacement(id) {
     const idx = es.replacements.findIndex(x => x.id === id);
     if (idx >= 0) es.replacements.splice(idx, 1);
     saveSettingsDebounced(); renderReplacementList();
-    toastr.info(`Editing "${r.name}" — modify and click Add`);
+    toastr.info(`Editing "${r.name}" â€” modify and click Add`);
 }
 
 // ==========================================================================
-// Filters — trigger-based with remove/append/replace actions
+// Filters â€” trigger-based with remove/append/replace actions
 // ==========================================================================
 function normalizeFilterTriggerGroups(f){if(Array.isArray(f?.triggerGroups)&&f.triggerGroups.length)return f.triggerGroups.map(g=>({trigger:String(g?.trigger||'').trim(),matchMode:['OR','AND','XOR','NOR'].includes(g?.matchMode)?g.matchMode:'OR'})).filter(g=>g.trigger);const t=String(f?.trigger||'').trim();return t?[{trigger:t,matchMode:f?.matchMode==='AND'?'AND':'OR'}]:[];}
 function renderFilterTriggerGroups(groups=[{trigger:'',matchMode:'OR'}]){const rows=groups.length?groups:[{trigger:'',matchMode:'OR'}];$('#ikarus_flt_trigger_groups').html(rows.map((g,i)=>`<div class="ikarus-trigger-group"><input class="text_pole ikarus-flt-group-trigger" value="${esc(g.trigger||'')}" placeholder="e.g. hat, shirt"><select class="text_pole ikarus-flt-group-mode"><option value="OR" ${g.matchMode==='OR'?'selected':''}>OR (any)</option><option value="AND" ${g.matchMode==='AND'?'selected':''}>AND (all)</option><option value="XOR" ${g.matchMode==='XOR'?'selected':''}>XOR (exactly one)</option><option value="NOR" ${g.matchMode==='NOR'?'selected':''}>NOR (none)</option></select>${i?'<button type="button" class="menu_button ikarus-trigger-group-remove">&times;</button>':''}</div>`).join(''));}
@@ -522,24 +523,24 @@ function renderFilterList() {
 
     container.html(items.map(f => {
         const transferBtn = f.scope === 'global'
-            ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">📥</button>`
-            : `<button class="menu_button ikarus-transfer-item" title="Move to global">📤</button>`;
+            ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">ðŸ“¥</button>`
+            : `<button class="menu_button ikarus-transfer-item" title="Move to global">ðŸ“¤</button>`;
         return `
         <div class="ikarus-card ${f.enabled ? '' : 'disabled'}" data-id="${esc(f.id)}" data-type="filter">
             <div class="card-header">
                 <span class="card-name">${esc(f.name || 'Unnamed')}</span>
                 <div class="card-actions">
                     ${transferBtn}
-                    <button class="menu_button ikarus-toggle-item">${f.enabled ? '✅' : '⬜'}</button>
-                    <button class="menu_button ikarus-edit-item" title="Edit">✏️</button>
-                    <button class="menu_button ikarus-delete-item" title="Delete">🗑️</button>
+                    <button class="menu_button ikarus-toggle-item">${f.enabled ? 'âœ…' : 'â¬œ'}</button>
+                    <button class="menu_button ikarus-edit-item" title="Edit">âœï¸</button>
+                    <button class="menu_button ikarus-delete-item" title="Delete">ðŸ—‘ï¸</button>
                 </div>
             </div>
             <div class="card-details">
                 <div><b class="trigger-label">When:</b> ${esc(filterTriggerGroupsLabel(f))}</div>
-                <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? '✂ Remove:' : f.action === 'append' ? '+ Append:' : '⇄ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
-                ${f.action === 'replace' ? `<div><b class="replace-label">→</b> ${esc((f.actionText || '').substring(0, 80))}</div>` : ''}
-                <div>Target: ${f.target || 'positive'} | <span class="scope-badge">${f.scope === 'char' ? '👤' : '🌐'}</span></div>
+                <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? 'âœ‚ Remove:' : f.action === 'append' ? '+ Append:' : 'â‡„ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
+                ${f.action === 'replace' ? `<div><b class="replace-label">â†’</b> ${esc((f.actionText || '').substring(0, 80))}</div>` : ''}
+                <div>Target: ${f.target || 'positive'} | <span class="scope-badge">${f.scope === 'char' ? 'ðŸ‘¤' : 'ðŸŒ'}</span></div>
             </div>
         </div>`;
     }).join(''));
@@ -581,7 +582,7 @@ function editFilter(id) {
     const idx = es.filters.findIndex(x => x.id === id);
     if (idx >= 0) es.filters.splice(idx, 1);
     saveSettingsDebounced(); renderFilterList();
-    toastr.info(`Editing "${f.name}" — modify and click Add`);
+    toastr.info(`Editing "${f.name}" â€” modify and click Add`);
 }
 
 function updateFilterFormVisibility() {
@@ -637,7 +638,7 @@ function transferItem(id, type) {
     const charName = getCurrentCharName();
 
     if (item.scope === 'global') {
-        // Global → Character
+        // Global â†’ Character
         if (!charId) { toastr.warning('Select a character first'); return; }
         item.scope = 'char'; item.charId = charId;
         // Also transfer children for replacements
@@ -646,7 +647,7 @@ function transferItem(id, type) {
         }
         toastr.success(`"${item.name}" moved to ${charName}`);
     } else {
-        // Character → Global
+        // Character â†’ Global
         item.scope = 'global'; item.charId = null; item.folder = '';
         if (type === 'replacement') {
             es.replacements.filter(r => r.parentId === id).forEach(c => { c.scope = 'global'; c.charId = null; c.folder = ''; });
@@ -703,19 +704,19 @@ function openGlobalManager() {
         let html = `<div class="ikarus-folder-item ikarus-library-launch" data-folder="__library__"><span>Character Library</span><small>Reusable character sets</small></div>`;
         html += `<div class="ikarus-manager-nav-label">GLOBAL REPLACEMENTS</div>`;
         html += `<div class="ikarus-folder-item ${activeFolder === null ? 'active' : ''}" data-folder="__all__">All</div>`;
-        html += `<div class="ikarus-folder-item ${activeFolder === '' ? 'active' : ''}" data-folder="__unfiled__">📄 Unfiled</div>`;
+        html += `<div class="ikarus-folder-item ${activeFolder === '' ? 'active' : ''}" data-folder="__unfiled__">ðŸ“„ Unfiled</div>`;
 
         // Render categories with nested folders
         for (const cat of categories) {
             const catFolders = folders.filter(f => (fc[f] || '') === cat);
             html += `<div class="ikarus-cat-header">
-                <span class="ikarus-cat-toggle" data-cat="${esc(cat)}">📚 ${esc(cat)}</span>
+                <span class="ikarus-cat-toggle" data-cat="${esc(cat)}">ðŸ“š ${esc(cat)}</span>
                 <button class="ikarus-cat-delete" data-cat="${esc(cat)}" title="Delete category">&#10005;</button>
             </div>`;
             html += `<div class="ikarus-cat-children" data-cat="${esc(cat)}">`;
             for (const f of catFolders) {
                 html += `<div class="ikarus-folder-item ikarus-folder-nested ${activeFolder === f ? 'active' : ''}" data-folder="${esc(f)}">
-                    <span>📁 ${esc(f)}</span>
+                    <span>ðŸ“ ${esc(f)}</span>
                     <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">&#10005;</button>
                 </div>`;
             }
@@ -726,13 +727,13 @@ function openGlobalManager() {
         // Uncategorized folders
         const uncatFolders = folders.filter(f => !fc[f] || !categories.includes(fc[f]));
         if (uncatFolders.length) {
-            html += `<div class="ikarus-cat-header"><span>📌 Uncategorized</span></div>`;
+            html += `<div class="ikarus-cat-header"><span>ðŸ“Œ Uncategorized</span></div>`;
             for (const f of uncatFolders) {
                 html += `<div class="ikarus-folder-item ${activeFolder === f ? 'active' : ''}" data-folder="${esc(f)}">
-                    <span>📁 ${esc(f)}</span>
+                    <span>ðŸ“ ${esc(f)}</span>
                     <div class="ikarus-folder-item-actions">
                         <select class="ikarus-folder-cat-select" data-folder="${esc(f)}" title="Assign to category">
-                            <option value="">—</option>
+                            <option value="">â€”</option>
                             ${categories.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}
                         </select>
                         <button class="ikarus-folder-delete" data-folder="${esc(f)}" title="Delete folder">&#10005;</button>
@@ -774,15 +775,15 @@ function openGlobalManager() {
                     <span class="ikarus-mgr-name">${esc(r.name || 'Unnamed')}</span>
                     <div class="ikarus-mgr-actions">
                         <select class="ikarus-mgr-folder-select text_pole" data-id="${esc(r.id)}">${selOpts}</select>
-                        <button class="menu_button ikarus-mgr-toggle" data-id="${esc(r.id)}" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? '✅' : '⬜'}</button>
-                        <button class="menu_button ikarus-mgr-edit" data-id="${esc(r.id)}" title="Edit">✏️</button>
-                        <button class="menu_button ikarus-mgr-delete" data-id="${esc(r.id)}" title="Delete">🗑️</button>
+                        <button class="menu_button ikarus-mgr-toggle" data-id="${esc(r.id)}" title="${r.enabled ? 'Disable' : 'Enable'}">${r.enabled ? 'âœ…' : 'â¬œ'}</button>
+                        <button class="menu_button ikarus-mgr-edit" data-id="${esc(r.id)}" title="Edit">âœï¸</button>
+                        <button class="menu_button ikarus-mgr-delete" data-id="${esc(r.id)}" title="Delete">ðŸ—‘ï¸</button>
                     </div>
                 </div>
                 <div class="ikarus-mgr-trigger"><b>Find:</b> ${esc(r.trigger)} <em>(${r.matchMode || 'OR'})</em></div>
-                <div class="ikarus-mgr-replace"><b>🏷️</b> ${esc((r.replacement || '').substring(0, 120))}${(r.replacement || '').length > 120 ? '…' : ''}</div>
-                ${r.caption && r.caption !== r.replacement ? `<div class="ikarus-mgr-replace"><b>💬</b> ${esc((r.caption || '').substring(0, 120))}${(r.caption || '').length > 120 ? '…' : ''}</div>` : ''}
-                <div class="ikarus-mgr-meta">Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0}${children.length ? ` | ${children.length} child(ren)` : ''} | Active: ${es.repFieldMode === 'caption' ? '💬' : '🏷️'}</div>
+                <div class="ikarus-mgr-replace"><b>ðŸ·ï¸</b> ${esc((r.replacement || '').substring(0, 120))}${(r.replacement || '').length > 120 ? 'â€¦' : ''}</div>
+                ${r.caption && r.caption !== r.replacement ? `<div class="ikarus-mgr-replace"><b>ðŸ’¬</b> ${esc((r.caption || '').substring(0, 120))}${(r.caption || '').length > 120 ? 'â€¦' : ''}</div>` : ''}
+                <div class="ikarus-mgr-meta">Mode: ${r.replaceMode === 'all' ? 'All' : 'First'} | P${r.priority || 0}${children.length ? ` | ${children.length} child(ren)` : ''} | Active: ${es.repFieldMode === 'caption' ? 'ðŸ’¬' : 'ðŸ·ï¸'}</div>
                 <div class="ikarus-mgr-editform" id="ikarus_mgr_editform_${esc(r.id)}" style="display:none;"></div>
             </div>`;
         }
@@ -797,10 +798,10 @@ function openGlobalManager() {
             <div class="ikarus-mgr-edit-grid">
                 <label>Name</label><input class="text_pole mgr-ed-name" value="${esc(r.name || '')}" />
                 <label>Trigger</label><input class="text_pole mgr-ed-trigger" value="${esc(r.trigger || '')}" />
-                <label>Tags (🏷️)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
-                <label>Caption (💬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
+                <label>Tags (ðŸ·ï¸)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
+                <label>Caption (ðŸ’¬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
                 <label>Krea 2 (K2)</label><textarea class="text_pole mgr-ed-krea2" rows="2">${esc(r.krea2 || '')}</textarea>
-                <label>Dedupe tag (🔁)</label><input class="text_pole mgr-ed-short-tag" value="${esc(r.shortTag || '')}" placeholder="e.g. darkness \\(konosuba\\) — used for 2nd+ occurrences in 'First full' mode" />
+                <label>Dedupe tag (ðŸ”)</label><input class="text_pole mgr-ed-short-tag" value="${esc(r.shortTag || '')}" placeholder="e.g. darkness \\(konosuba\\) â€” used for 2nd+ occurrences in 'First full' mode" />
                 <label>Match</label>
                 <select class="text_pole mgr-ed-match">
                     <option value="OR"${r.matchMode === 'OR' ? ' selected' : ''}>OR</option>
@@ -816,7 +817,7 @@ function openGlobalManager() {
                 <label>Priority</label><input class="text_pole mgr-ed-priority" type="number" value="${r.priority || 0}" />
             </div>
             <div class="ikarus-mgr-edit-btns">
-                <button class="menu_button ikarus-mgr-save" data-id="${esc(rid)}">💾 Save</button>
+                <button class="menu_button ikarus-mgr-save" data-id="${esc(rid)}">ðŸ’¾ Save</button>
                 <button class="menu_button ikarus-mgr-cancel" data-id="${esc(rid)}">Cancel</button>
             </div>
         `).slideDown(150);
@@ -831,12 +832,12 @@ function openGlobalManager() {
         const existing = $('#ikarus_mgr_addform');
         if (existing.length) { existing.slideToggle(150); return; }
         const form = $(`<div id="ikarus_mgr_addform" class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);">
-            <div class="ikarus-mgr-name" style="margin-bottom:6px;">âž• New Replacement</div>
+            <div class="ikarus-mgr-name" style="margin-bottom:6px;">Ã¢Å¾â€¢ New Replacement</div>
             <div class="ikarus-mgr-edit-grid">
                 <label>Name</label><input class="text_pole mgr-new-name" placeholder="e.g. Bloom(Winx)" />
                 <label>Trigger</label><input class="text_pole mgr-new-trigger" placeholder="e.g. bloom, Bloom winx, bloom winx club" />
-                <label>Tags (🏷️)</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
-                <label>Caption (💬)</label><textarea class="text_pole mgr-new-caption" rows="2" placeholder="Same as tags, or a descriptive caption"></textarea>
+                <label>Tags (ðŸ·ï¸)</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
+                <label>Caption (ðŸ’¬)</label><textarea class="text_pole mgr-new-caption" rows="2" placeholder="Same as tags, or a descriptive caption"></textarea>
                 <label>Krea 2 (K2)</label><textarea class="text_pole mgr-new-krea2" rows="2" placeholder="Krea 2-specific replacement (optional)"></textarea>
                 <label>Match</label>
                 <select class="text_pole mgr-new-match"><option value="OR">OR</option><option value="AND">AND</option><option value="CHILD">CHILD</option></select>
@@ -844,7 +845,7 @@ function openGlobalManager() {
                 <label>Folder</label><select class="text_pole mgr-new-folder">${folderSel}</select>
             </div>
             <div class="ikarus-mgr-edit-btns">
-                <button class="menu_button" id="ikarus_mgr_addconfirm">âž• Add</button>
+                <button class="menu_button" id="ikarus_mgr_addconfirm">Ã¢Å¾â€¢ Add</button>
                 <button class="menu_button" id="ikarus_mgr_addcancel">Cancel</button>
             </div>
         </div>`);
@@ -918,7 +919,7 @@ function openGlobalManager() {
         else { delete es.folderCategories[folder]; }
         saveSettingsDebounced();
         renderFolders();
-        toastr.success(`"${folder}" → ${cat || 'Uncategorized'}`);
+        toastr.success(`"${folder}" â†’ ${cat || 'Uncategorized'}`);
     });
     overlay.on('input', '#ikarus_manager_search', function () {
         searchQuery = $(this).val() || '';
@@ -952,7 +953,7 @@ function openGlobalManager() {
         saveSettingsDebounced(); renderManagerCards(); renderReplacementList();
         toastr.success(`"${r.name}" deleted`);
     });
-    // Edit — open inline form
+    // Edit â€” open inline form
     overlay.on('click', '.ikarus-mgr-edit', function () {
         showEditForm($(this).data('id'));
     });
@@ -978,9 +979,9 @@ function openGlobalManager() {
         const rid = $(this).data('id');
         $(`#ikarus_mgr_editform_${esc(rid)}`).slideUp(150);
     });
-    // Add new — show form
+    // Add new â€” show form
     overlay.on('click', '#ikarus_mgr_add', showAddForm);
-    // Add new — confirm
+    // Add new â€” confirm
     overlay.on('click', '#ikarus_mgr_addconfirm', function () {
         const trigger = $('#ikarus_mgr_addform .mgr-new-trigger').val()?.trim();
         const replacement = $('#ikarus_mgr_addform .mgr-new-replacement').val()?.trim();
@@ -1005,7 +1006,7 @@ function openGlobalManager() {
         saveSettingsDebounced(); renderManagerCards(); renderReplacementList();
         toastr.success('Replacement added');
     });
-    // Add new — cancel
+    // Add new â€” cancel
     overlay.on('click', '#ikarus_mgr_addcancel', function () {
         $('#ikarus_mgr_addform').slideUp(150, function () { $(this).remove(); });
     });
@@ -1019,7 +1020,7 @@ function openGlobalManager() {
             folderSel += `<option value="${esc(f)}"${activeFolder && activeFolder === f ? ' selected' : ''}>${esc(f)}</option>`;
         }
         const form = $(`<div id="ikarus_mgr_bulkform" class="ikarus-mgr-card" style="border-color:var(--SmartThemeQuoteColor,#e0a0ff);">
-            <div class="ikarus-mgr-name" style="margin-bottom:6px;">📦 Bulk Import — Paste JSON</div>
+            <div class="ikarus-mgr-name" style="margin-bottom:6px;">ðŸ“¦ Bulk Import â€” Paste JSON</div>
             <div class="ikarus-hint" style="font-size:10px;margin-bottom:6px;opacity:0.6;">
                 Format: <code>{"key": {"aliases": [...], "tags": "...", "caption": "..."}}</code>
             </div>
@@ -1027,19 +1028,19 @@ function openGlobalManager() {
             <div class="ikarus-mgr-edit-grid" style="grid-template-columns:auto 1fr; margin-top:6px;">
                 <label>Scope</label>
                 <select class="text_pole mgr-bulk-scope">
-                    <option value="global">🌐 Global</option>
-                    <option value="char">👤 Current Character</option>
+                    <option value="global">ðŸŒ Global</option>
+                    <option value="char">ðŸ‘¤ Current Character</option>
                 </select>
                 <label>Folder</label><select class="text_pole mgr-bulk-folder">${folderSel}</select>
             </div>
             <div class="ikarus-mgr-edit-btns">
-                <button class="menu_button" id="ikarus_mgr_bulkconfirm">📦 Import All</button>
+                <button class="menu_button" id="ikarus_mgr_bulkconfirm">ðŸ“¦ Import All</button>
                 <button class="menu_button" id="ikarus_mgr_bulkcancel">Cancel</button>
             </div>
         </div>`);
         $('#ikarus_manager_cards .ikarus-mgr-toolbar').after(form);
     });
-    // Bulk import — confirm
+    // Bulk import â€” confirm
     overlay.on('click', '#ikarus_mgr_bulkconfirm', function () {
         const raw = $('#ikarus_mgr_bulkform .mgr-bulk-json').val()?.trim();
         const scope = $('#ikarus_mgr_bulkform .mgr-bulk-scope').val() || 'global';
@@ -1081,7 +1082,7 @@ function openGlobalManager() {
             toastr.warning('No valid entries found in JSON');
         }
     });
-    // Bulk import — cancel
+    // Bulk import â€” cancel
     overlay.on('click', '#ikarus_mgr_bulkcancel', function () {
         $('#ikarus_mgr_bulkform').slideUp(150, function () { $(this).remove(); });
     });
@@ -1137,7 +1138,7 @@ function openCharacterLibrary() {
         if (!folder) { $('#ikarus_library_details').html('<div class="ikarus-library-empty"><h3>Character Library</h3><p>Create a universe or project folder on the left.</p><p>Then add reusable characters with Tags, Caption, and Krea 2 text.</p></div>'); return; }
         const reps = folder.replacements || [], filters = folder.filters || [];
         $('#ikarus_library_details').html(`
-          <div class="ikarus-library-titlebar"><div><h3>${esc(folder.name)}</h3><div class="ikarus-mgr-meta">${reps.length} character(s) · ${filters.length} filter(s)</div></div><button id="ikarus_library_import" class="menu_button primary" ${charId ? '' : 'disabled'}>Import all into ${esc(charId ? charName : 'current card')}</button></div>
+          <div class="ikarus-library-titlebar"><div><h3>${esc(folder.name)}</h3><div class="ikarus-mgr-meta">${reps.length} character(s) Â· ${filters.length} filter(s)</div></div><button id="ikarus_library_import" class="menu_button primary" ${charId ? '' : 'disabled'}>Import all into ${esc(charId ? charName : 'current card')}</button></div>
           <div class="ikarus-library-actions"><button id="ikarus_library_add_character" class="menu_button">+ Add character</button><button id="ikarus_library_remove_character" class="menu_button" ${reps.length ? '' : 'disabled'}>Remove character</button><button id="ikarus_library_overwrite" class="menu_button" ${charId ? '' : 'disabled'}>Replace folder with current card</button></div>
           <div id="ikarus_library_character_form"></div>
           <div class="ikarus-library-list">${reps.length ? reps.map(r => `<div class="ikarus-mgr-card"><div class="ikarus-mgr-name">${esc(r.name || 'Unnamed character')}</div><div class="ikarus-mgr-trigger"><b>Trigger:</b> ${esc(r.trigger || '')}</div><div class="ikarus-mgr-replace"><b>Tags:</b> ${esc((r.replacement || '').slice(0,160))}</div>${r.caption ? `<div class="ikarus-mgr-replace"><b>Caption:</b> ${esc((r.caption || '').slice(0,160))}</div>` : ''}${r.krea2 ? `<div class="ikarus-mgr-replace"><b>Krea 2:</b> ${esc((r.krea2 || '').slice(0,160))}</div>` : ''}</div>`).join('') : '<div class="ikarus-library-empty compact"><p>This folder has no characters yet.</p><p>Click <b>Add character</b> above.</p></div>'}</div>
@@ -1282,9 +1283,9 @@ function doReplace(text, rule) {
     for (const kw of keywords) {
         const escaped = escRegex(kw);
         if (rule.replaceMode === 'first_full') {
-            // First occurrence → full replacement text
+            // First occurrence â†’ full replacement text
             result = result.replace(new RegExp(`\\b${escaped}\\b`, 'i'), activeText.trim());
-            // Remaining occurrences → short dedupe tag (or just the keyword with disambiguation if no shortTag set)
+            // Remaining occurrences â†’ short dedupe tag (or just the keyword with disambiguation if no shortTag set)
             const dedupeText = (rule.shortTag || kw).trim();
             result = result.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), dedupeText);
         } else {
@@ -1339,7 +1340,7 @@ function applyFiltersToPrompt(prompt, negative) {
             const regex = new RegExp(`\\b${escaped}\\b`, 'gi');
             if (target === 'positive' || target === 'both') p = p.replace(regex, replaceWith);
             if (target === 'negative' || target === 'both') n = n.replace(regex, replaceWith);
-            console.log(`[${EXT}] Filter "${f.name}" replaced: ${find} → ${replaceWith.substring(0, 50)}`);
+            console.log(`[${EXT}] Filter "${f.name}" replaced: ${find} â†’ ${replaceWith.substring(0, 50)}`);
         }
     }
 
@@ -1347,7 +1348,7 @@ function applyFiltersToPrompt(prompt, negative) {
 }
 
 // ==========================================================================
-// PROCESSING: Double Cleaner — strip duplicate tags
+// PROCESSING: Double Cleaner â€” strip duplicate tags
 // ==========================================================================
 function applyDoubleCleaner(text) {
     const dc = s().doubleCleaner;
@@ -1550,11 +1551,11 @@ function syncPromptInjection() {
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
             console.log(`[${EXT}] Separate mode: prompt injection cleared (will use second API call)`);
         } else if (isMacro) {
-            // Clear native prompt — macro mode handles injection via {{IkarusAutoImage-prompt}} macro replacement
+            // Clear native prompt â€” macro mode handles injection via {{IkarusAutoImage-prompt}} macro replacement
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
             console.log(`[${EXT}] Macro mode ${enabled ? 'active' : 'cleared'}: prompt will be injected via {{IkarusAutoImage-prompt}} macro`);
         } else if (isAppendUser) {
-            // Clear native prompt — append_user mode handles injection via GENERATION_STARTED
+            // Clear native prompt â€” append_user mode handles injection via GENERATION_STARTED
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
             console.log(`[${EXT}] Append-to-user mode ${enabled ? 'active' : 'cleared'}: charPrompt=${charPrompt ? 'yes' : 'none'}`);
         } else {
@@ -1630,11 +1631,11 @@ if (event_types.SD_PROMPT_PROCESSING) {
 }
 
 // ==========================================================================
-// Character change detection — auto-refresh when switching cards
+// Character change detection â€” auto-refresh when switching cards
 // ==========================================================================
 eventSource.on(event_types.CHAT_CHANGED, function () {
     _isAwaitingNewMessage = false;
-    console.log(`[${EXT}] Chat changed — refreshing character-specific UI`);
+    console.log(`[${EXT}] Chat changed â€” refreshing character-specific UI`);
     migrateCharKeys();
     loadCharPrompt();
     loadCharPrefix();
@@ -1646,11 +1647,11 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
         // Switch replacements to character scope
         currentRepScope = 'char';
         $('#ikarus_rep_scope_global').removeClass('active');
-        $('#ikarus_rep_scope_char').addClass('active').text(`👤 ${charName}`);
+        $('#ikarus_rep_scope_char').addClass('active').text(`ðŸ‘¤ ${charName}`);
         // Switch filters to character scope
         currentFltScope = 'char';
         $('#ikarus_flt_scope_global').removeClass('active');
-        $('#ikarus_flt_scope_char').addClass('active').text(`👤 ${charName}`);
+        $('#ikarus_flt_scope_char').addClass('active').text(`ðŸ‘¤ ${charName}`);
     }
     renderReplacementList();
     renderFilterList();
@@ -1658,7 +1659,7 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
 });
 
 // ==========================================================================
-// Message Handler — detect → process → generate
+// Message Handler â€” detect â†’ process â†’ generate
 // ==========================================================================
 eventSource.on(event_types.MESSAGE_RECEIVED, handleIncomingMessage);
 
@@ -1694,7 +1695,7 @@ function getImagePromptMatches(text, regexPattern) {
  *          and bare/unwrapped pic prompt="..." with no brackets at all.
  */
 function normalizePicPrompts(text) {
-    // Step 1: Fix wrapped variants — *pic..*, (pic..), {pic..}, <pic..>
+    // Step 1: Fix wrapped variants â€” *pic..*, (pic..), {pic..}, <pic..>
     // This regex matches any opening wrapper char(s), then pic prompt="...", then closing wrapper char(s)
     let result = text.replace(/(?:[*_~`]+\s*|[(\[{<]\s*)pic\s+prompt\s*=\s*"([^"]*?)"\s*(?:[*_~`]+|[)\]}>])/gi,
         (_match, prompt) => `[pic prompt="${prompt}"]`
@@ -1882,7 +1883,7 @@ ${userPrompt}`, 'Separate mode',
 }
 
 // ==========================================================================
-// Manual Rescan — trigger image processing on last N AI messages on demand
+// Manual Rescan â€” trigger image processing on last N AI messages on demand
 // ==========================================================================
 async function handleManualRescan() {
     const es = s();
@@ -2163,7 +2164,7 @@ async function handleIncomingMessage() {
                 }
             }
 
-            // Auto-clean AFTER generation — strips [pic] tags from message text
+            // Auto-clean AFTER generation â€” strips [pic] tags from message text
             // Images are already stored (extra.image for inline, <img> for replace)
             if (es.autoClean) {
                 try {
@@ -2181,7 +2182,7 @@ async function handleIncomingMessage() {
 }
 
 // ==========================================================================
-// STANDALONE GALLERY — isolated from roleplay messages
+// STANDALONE GALLERY â€” isolated from roleplay messages
 // ==========================================================================
 let _standaloneCancelled = false;
 let _standaloneBusy = false;
@@ -2205,7 +2206,7 @@ function syncStandaloneBubbleVisibility() {
 }
 function createStandaloneWindow() {
     if ($('#ikarus_standalone_bubble').length) return;
-    $('body').append(`<button id="ikarus_standalone_bubble" title="Open Standalone Image Studio"><span>🖼️</span></button>
+    $('body').append(`<button id="ikarus_standalone_bubble" title="Open Standalone Image Studio"><span>ðŸ–¼ï¸</span></button>
     <section id="ikarus_standalone_window" class="closed">
       <header id="ikarus_standalone_header"><b>Standalone Image Studio</b><span id="ikarus_standalone_status">Ready</span><button id="ikarus_standalone_minimize" type="button" title="Close to bubble">&times;</button></header>
       <nav class="ikarus-standalone-tabs"><button class="active" data-tab="chat">Assistant</button><button data-tab="gallery">Gallery <span id="ikarus_gallery_badge">0</span></button></nav>
@@ -2216,7 +2217,7 @@ function createStandaloneWindow() {
       <footer><textarea id="ikarus_standalone_request" rows="2" placeholder="Describe an image, or ask for a chronological image sequence..."></textarea><button id="ikarus_standalone_send">Generate</button><button id="ikarus_standalone_stop" disabled>Stop</button></footer>
       <div class="ikarus-resize-grip" title="Drag to resize"></div>
     </section>
-    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header · drag corner</span><button class="ikarus-viewer-meta-toggle">Hide details</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
+    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header Â· drag corner</span><button class="ikarus-viewer-meta-toggle">Hide details</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
     const win=$('#ikarus_standalone_window'), bubble=$('#ikarus_standalone_bubble');
     syncStandaloneBubbleVisibility();
     function switchTab(tab){ $('.ikarus-standalone-tabs button').removeClass('active').filter(`[data-tab="${tab}"]`).addClass('active'); $('.ikarus-standalone-tab').removeClass('active'); $(`#ikarus_standalone_${tab}_tab`).addClass('active'); }
@@ -2474,12 +2475,12 @@ async function createSettings(html) {
         $(this).closest('.ikarus-trigger-group').remove();
     });
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
-    $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderReplacementList(); });
+    $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`ðŸ‘¤ ${getCurrentCharName()}`); renderReplacementList(); });
     $('#ikarus_rep_add').on('click', function () {
         const pid = _addChildParentId || $(this).data('parent-id') || null;
         addReplacement(pid);
         _addChildParentId = null;
-        $('#ikarus_rep_add').text('âž• Add Replacement');
+        $('#ikarus_rep_add').text('Ã¢Å¾â€¢ Add Replacement');
     });
     // Show/hide dedupe tag row based on mode selection
     $('#ikarus_rep_mode').on('change', function () {
@@ -2488,7 +2489,7 @@ async function createSettings(html) {
 
     // Section 4: Filters
     $('#ikarus_flt_scope_global').on('click', function () { currentFltScope = 'global'; $(this).addClass('active'); $('#ikarus_flt_scope_char').removeClass('active'); renderFilterList(); });
-    $('#ikarus_flt_scope_char').on('click', function () { currentFltScope = 'char'; $(this).addClass('active'); $('#ikarus_flt_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderFilterList(); });
+    $('#ikarus_flt_scope_char').on('click', function () { currentFltScope = 'char'; $(this).addClass('active'); $('#ikarus_flt_scope_global').removeClass('active'); $(this).text(`ðŸ‘¤ ${getCurrentCharName()}`); renderFilterList(); });
     renderFilterTriggerGroups();
     $('#ikarus_flt_add').on('click', addFilter);
     $('#ikarus_flt_add_group').on('click',function(){const g=readFilterTriggerGroups();g.push({trigger:'',matchMode:'OR'});renderFilterTriggerGroups(g);$('#ikarus_flt_trigger_groups .ikarus-trigger-group:last input').trigger('focus');});
@@ -2506,11 +2507,12 @@ async function createSettings(html) {
     $('#ikarus_rep_field_mode').on('change', function () {
         s().repFieldMode = $(this).val(); saveSettingsDebounced();
         renderReplacementList();
-        toastr.info(`Replacement mode: ${$(this).val() === 'caption' ? '💬 Caption' : '🏷️ Tags'}`);
+        toastr.info(`Replacement mode: ${$(this).val() === 'caption' ? 'ðŸ’¬ Caption' : 'ðŸ·ï¸ Tags'}`);
     });
     $('#ikarus_auto_clean').on('change', function () { s().autoClean = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_auto_fix_pic').on('change', function () { s().autoFixPicFormat = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_filter_native_sd').on('change', function () { s().filterNativeSd = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_filter_imagine').on('change', function () { s().filterImagine = $(this).prop('checked'); ensureImagineCommandWrapped(); saveSettingsDebounced(); });
     $('#ikarus_dc_mode').on('change', function () {
         s().doubleCleaner.mode = $(this).val(); saveSettingsDebounced();
         $('#ikarus_dc_tags_row').toggle($(this).val() === 'listed');
@@ -2528,7 +2530,7 @@ async function createSettings(html) {
         const parentId = $(this).closest('.ikarus-card').data('id');
         const parentName = s().replacements.find(r => r.id === parentId)?.name || '';
         _addChildParentId = parentId;
-        $('#ikarus_rep_add').text(`âž• Add Child of "${parentName}"`);
+        $('#ikarus_rep_add').text(`Ã¢Å¾â€¢ Add Child of "${parentName}"`);
         $('#ikarus_rep_name').focus();
         toastr.info(`Adding child for "${parentName}". Fill the form and click Add.`);
     });
@@ -2584,7 +2586,7 @@ $(function () {
                 });
                 console.log(`[${EXT}] Registered {{IkarusAutoImage-prompt}} macro via context.macros.register()`);
             } else {
-                console.warn(`[${EXT}] context.macros.register() not available — macro mode will not work. Update SillyTavern to a newer version.`);
+                console.warn(`[${EXT}] context.macros.register() not available â€” macro mode will not work. Update SillyTavern to a newer version.`);
             }
         } catch (error) {
             console.warn(`[${EXT}] Could not register macro:`, error);
