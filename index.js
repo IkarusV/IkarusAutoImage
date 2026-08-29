@@ -60,6 +60,7 @@ const DEFAULT_SETTINGS = {
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
+    filterImagine: false, // when true, wraps /imagine so extension-originated calls cannot bypass processing
     generationMode: 'together', // 'together' | 'separate' | 'standalone'
     standalone: { auto: false, contextSize: 5, imageCount: 3, profile: '', systemPrompt: '', libraries: {}, bubbleOpen: false, hideBubble: false, includeCharacterCard: false, includeFirstMessage: false, includeExtensionPrompts: false },
     separateProfile: '', // connection profile ID for separate mode (empty = current)
@@ -187,6 +188,7 @@ function ensureSettings() {
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
+    if (es.filterImagine === undefined) es.filterImagine = false;
     if (!es.generationMode) es.generationMode = DEFAULT_SETTINGS.generationMode;
     if (es.separateProfile === undefined) es.separateProfile = DEFAULT_SETTINGS.separateProfile;
     if (es.separateContextSize === undefined) es.separateContextSize = DEFAULT_SETTINGS.separateContextSize;
@@ -1463,6 +1465,34 @@ function handleGlobalSdPromptProcessing(eventData) {
     }
 }
 
+const IKARUS_IMAGINE_WRAPPED = Symbol.for('IkarusAutoImage.imagineWrapped');
+
+function wrapImagineCommand() {
+    const command = SlashCommandParser.commands?.['imagine'];
+    if (!command || command[IKARUS_IMAGINE_WRAPPED] || typeof command.callback !== 'function') return false;
+    const originalCallback = command.callback;
+    command.callback = async function (args, trigger, ...rest) {
+        if (!s().filterImagine || typeof trigger !== 'string' || !trigger.trim()) return originalCallback.call(this, args, trigger, ...rest);
+        const processed = processPrompt(trigger, '');
+        if (processed.prompt !== trigger) {
+            markProcessedSdPrompt(processed.prompt);
+            console.log(`[${EXT}] /imagine prompt filtered before command execution`);
+        }
+        return originalCallback.call(this, args, processed.prompt, ...rest);
+    };
+    command[IKARUS_IMAGINE_WRAPPED] = true;
+    console.log(`[${EXT}] Wrapped /imagine command prompt processing`);
+    return true;
+}
+
+function ensureImagineCommandWrapped() {
+    if (wrapImagineCommand()) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+        attempts += 1;
+        if (wrapImagineCommand() || attempts >= 60) clearInterval(timer);
+    }, 1000);
+}
 // ==========================================================================
 // Auto-Cleaner (message tag cleanup)
 // ==========================================================================
@@ -1592,7 +1622,7 @@ eventSource.on(event_types.GENERATION_STARTED, () => {
 eventSource.on(event_types.GENERATION_ENDED, () => { restoreOriginalUserMessage(); });
 eventSource.on(event_types.GENERATION_STOPPED, () => { _isAwaitingNewMessage = false; restoreOriginalUserMessage(); });
 eventSource.on(event_types.CHAT_LOADED, syncPromptInjection);
-eventSource.on(event_types.APP_READY, syncPromptInjection);
+eventSource.on(event_types.APP_READY, () => { syncPromptInjection(); ensureImagineCommandWrapped(); });
 if (event_types.SD_PROMPT_PROCESSING) {
     eventSource.on(event_types.SD_PROMPT_PROCESSING, handleGlobalSdPromptProcessing);
 } else {
@@ -2179,7 +2209,7 @@ function createStandaloneWindow() {
     <section id="ikarus_standalone_window" class="closed">
       <header id="ikarus_standalone_header"><b>Standalone Image Studio</b><span id="ikarus_standalone_status">Ready</span><button id="ikarus_standalone_minimize" type="button" title="Close to bubble">&times;</button></header>
       <nav class="ikarus-standalone-tabs"><button class="active" data-tab="chat">Assistant</button><button data-tab="gallery">Gallery <span id="ikarus_gallery_badge">0</span></button></nav>
-      <div class="ikarus-standalone-toolbar"><label class="ikarus-auto-label"><input type="checkbox" id="ikarus_window_auto"><span>Auto mode</span></label><label>Profile <select id="ikarus_window_profile"><option value="">Same as Current</option></select></label><label>Context <input type="number" id="ikarus_window_context" min="1" max="999"></label><label>Images <input type="number" id="ikarus_window_count" min="1" max="30"></label><details class="ikarus-context-sources"><summary>Context sources</summary><div><label><input type="checkbox" id="ikarus_window_include_card"> Character card</label><label><input type="checkbox" id="ikarus_window_include_first"> First message</label><label><input type="checkbox" id="ikarus_window_include_extensions"> Extension injections</label></div></details><button id="ikarus_standalone_clear">Clear gallery</button></div>
+      <div class="ikarus-standalone-toolbar"><label class="ikarus-auto-label"><input type="checkbox" id="ikarus_window_auto"><span>Auto mode</span></label><label>Profile <select id="ikarus_window_profile"><option value="">Same as Current</option></select></label><label>Context <input type="number" id="ikarus_window_context" min="0" max="999"></label><label>Images <input type="number" id="ikarus_window_count" min="1" max="30"></label><details class="ikarus-context-sources"><summary>Context sources</summary><div><label><input type="checkbox" id="ikarus_window_include_card"> Character card</label><label><input type="checkbox" id="ikarus_window_include_first"> First message</label><label><input type="checkbox" id="ikarus_window_include_extensions"> Extension injections</label></div></details><button id="ikarus_standalone_clear">Clear gallery</button></div>
       <main id="ikarus_standalone_chat_tab" class="ikarus-standalone-tab active"><div class="ikarus-assistant-intro"><h3>Image Assistant</h3><p>Ask for one image or a chronological scene sequence. Story context is added automatically.</p></div><div id="ikarus_standalone_chatlog"></div></main>
       <main id="ikarus_standalone_gallery_tab" class="ikarus-standalone-tab"><div id="ikarus_standalone_gallery"></div></main>
       <div id="ikarus_standalone_progress"></div>
@@ -2203,7 +2233,7 @@ function createStandaloneWindow() {
     $('#ikarus_standalone_stop').on('click',stopStandaloneGeneration);
     $('#ikarus_window_auto').on('change',function(){s().standalone.auto=$(this).prop('checked');$('#ikarus_standalone_auto').prop('checked',s().standalone.auto);saveSettingsDebounced();});
     $('#ikarus_window_profile').on('change',function(){s().standalone.profile=$(this).val();$('#ikarus_standalone_profile').val(s().standalone.profile);saveSettingsDebounced();renderStandaloneGallery();});
-    $('#ikarus_window_context').on('change',function(){s().standalone.contextSize=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
+    $('#ikarus_window_context').on('change',function(){s().standalone.contextSize=Math.max(0,parseInt($(this).val())||0);$('#ikarus_standalone_context').val(s().standalone.contextSize);saveSettingsDebounced();});
     $('#ikarus_window_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();});
     $('#ikarus_window_include_card').on('change',function(){s().standalone.includeCharacterCard=$(this).prop('checked');$('#ikarus_standalone_include_card').prop('checked',s().standalone.includeCharacterCard);saveSettingsDebounced();});
     $('#ikarus_window_include_first').on('change',function(){s().standalone.includeFirstMessage=$(this).prop('checked');$('#ikarus_standalone_include_first').prop('checked',s().standalone.includeFirstMessage);saveSettingsDebounced();});
@@ -2283,7 +2313,7 @@ function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[]
 function standaloneContextText() {
     const ctx = getContext();
     const st = s().standalone;
-    const n = Math.max(1, Number(st.contextSize) || 1);
+    const configuredContextSize = Math.max(0, Number(st.contextSize) || 0);
     const sections = [];
 
     if (st.includeCharacterCard) {
@@ -2311,9 +2341,10 @@ function standaloneContextText() {
         if (injected.length) sections.push(`ACTIVE EXTENSION INJECTIONS:\n${injected.join('\n\n')}`);
     }
 
-    const recentMessages=(ctx.chat||[]).filter(m=>m?.mes).slice(-n);
+    const allChatMessages = (ctx.chat || []).filter(m => m?.mes);
+    const recentMessages = configuredContextSize === 0 ? allChatMessages : allChatMessages.slice(-configuredContextSize);
     const recent=recentMessages.map((m,i)=>`${i===recentMessages.length-1?'LATEST MESSAGE - PRIMARY IMAGE SOURCE':'CONTEXT ONLY'} | Message ${i+1} (${m.is_user?'user':'character'}):\n${m.mes}`).join('\n\n');
-    sections.push(`RECENT CHAT (last ${n} messages):\n\nIMPORTANT: THE LATEST MESSAGE IS THE ONLY PRIMARY SOURCE FOR NEW IMAGES. EVERYTHING BEFORE IT IS CONTEXT ONLY, used solely for narrative, appearance, location, and continuity consistency. Do not create images for events found only in earlier messages.\n\n${recent}`);
+    sections.push(`RECENT CHAT (${configuredContextSize === 0 ? 'entire chat' : `last ${configuredContextSize} messages`}):\n\nIMPORTANT: THE LATEST MESSAGE IS THE ONLY PRIMARY SOURCE FOR NEW IMAGES. EVERYTHING BEFORE IT IS CONTEXT ONLY, used solely for narrative, appearance, location, and continuity consistency. Do not create images for events found only in earlier messages.\n\n${recent}`);
     return sections.join('\n\n=====\n\n');
 }
 async function requestStandalonePrompts(request, auto) {
@@ -2391,7 +2422,7 @@ async function createSettings(html) {
         saveSettingsDebounced();
     });
     $('#ikarus_standalone_auto').on('change', function(){s().standalone.auto=$(this).prop('checked');saveSettingsDebounced();renderStandaloneGallery();});
-    $('#ikarus_standalone_context').on('change',function(){s().standalone.contextSize=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});
+    $('#ikarus_standalone_context').on('change',function(){s().standalone.contextSize=Math.max(0,parseInt($(this).val())||0);$('#ikarus_window_context').val(s().standalone.contextSize);saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_profile').on('change',function(){s().standalone.profile=$(this).val();saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_hide_bubble').on('change',function(){s().standalone.hideBubble=$(this).prop('checked');saveSettingsDebounced();syncStandaloneBubbleVisibility();});

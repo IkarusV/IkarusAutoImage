@@ -51,7 +51,8 @@
             </div>
             <div class="ikarus-standalone-options" style="display:none;">
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>
-                <div class="ikarus-row"><label>Context messages</label><input id="ikarus_standalone_context" type="number" min="1" max="999" value="5" class="text_pole widthUnset"><label>Images per request</label><input id="ikarus_standalone_count" type="number" min="1" max="30" value="3" class="text_pole widthUnset"></div>
+                <div class="ikarus-row"><label>Context messages</label><input id="ikarus_standalone_context" type="number" min="0" max="999" value="5" class="text_pole widthUnset"><label>Images per request</label><input id="ikarus_standalone_count" type="number" min="1" max="30" value="3" class="text_pole widthUnset"></div>
+                <div class="ikarus-hint">0 = entire chat, 1 = latest message only, 2+ = latest N messages. Earlier messages are context only; the latest message remains the image source.</div>
                 <div class="ikarus-row"><label for="ikarus_standalone_profile">Standalone AI connection profile</label><select id="ikarus_standalone_profile" class="text_pole"><option value="">Same as Current</option></select></div>
                 <div class="ikarus-hint">This model creates image prompts. It is separate from the image generator selected by SillyTavern's /sd command.</div>
                 <div class="ikarus-standalone-context-settings">
@@ -270,6 +271,11 @@
                 <span>Filter native /sd prompts from SillyTavern and other extensions</span>
             </label>
             <div class="ikarus-hint" style="margin-bottom:8px;">When enabled, Ikarus replacements, filters, and double-cleaning also run on any prompt sent through SillyTavern's native image generation. Turn this off to only process prompts extracted by this extension.</div>
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_filter_imagine">
+                <span>Wrap and filter all /imagine calls</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">When enabled, Ikarus wraps the native <code>/imagine</code> callback so calls executed by other extensions, including Multihog DnD Framework, pass through replacements, filters, and double-cleaning. Enable both checkboxes for complete native image-generation coverage.</div>
 
             <div class="ikarus-row" style="align-items:center;gap:8px;margin-bottom:8px;">
                 <label style="margin:0;font-weight:600;">Replacement mode:</label>
