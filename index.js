@@ -1,4 +1,4 @@
-﻿// ==========================================================================
+// ==========================================================================
 // IkarusAutoImage â€” SillyTavern Extension
 // Auto-image generation with presets, replacements (with children hierarchy),
 // filters (remove/append/replace), double cleaner, and auto-cleaner.
@@ -390,8 +390,6 @@ function saveCharPrefix() {
 // ==========================================================================
 let currentRepScope = 'global';
 let currentFltScope = 'global';
-let _editingReplacementId = null;
-let _editingFilterId = null;
 
 function itemsForScope(list, scope) {
     const cid = getCurrentCharId();
@@ -435,7 +433,7 @@ function readReplacementTriggerGroups(){ return $('#ikarus_rep_trigger_groups .i
 function replacementTriggerGroupsLabel(r){return normalizeReplacementTriggerGroups(r).map(g=>`${g.trigger} (${g.matchMode})`).join(' AND ');}
 
 function renderRepCard(r, isChild) {
-    const indent = isChild ? '\u2514\u2500' : '';
+    const indent = isChild ? 'style="margin-left:20px;border-left:3px solid var(--SmartThemeQuoteColor,#e0a0ff);"' : '';
     const prefix = isChild ? 'â†³ ' : '';
     const transferBtn = r.scope === 'global'
         ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">ðŸ“¥</button>`
@@ -477,34 +475,6 @@ function addReplacement(parentId) {
     if (!trigger) { toastr.warning('Trigger is required'); return; }
     if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
 
-    if (_editingReplacementId) {
-        // Edit-in-place: update the existing rule instead of creating a new one
-        const existing = s().replacements.find(x => x.id === _editingReplacementId);
-        if (existing) {
-            existing.name = name || trigger;
-            existing.scope = currentRepScope;
-            existing.charId = currentRepScope === 'char' ? getCurrentCharId() : null;
-            existing.trigger = trigger;
-            existing.matchMode = matchMode;
-            existing.triggerGroups = triggerGroups;
-            existing.replacement = replacement || caption || krea2;
-            existing.caption = caption || replacement || krea2;
-            existing.krea2 = krea2 || caption || replacement;
-            existing.shortTag = shortTag || '';
-            existing.replaceMode = replaceMode;
-            existing.priority = priority;
-            existing.parentId = parentId || existing.parentId || null;
-            _editingReplacementId = null;
-            saveSettingsDebounced(); renderReplacementList();
-            $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
-            renderReplacementTriggerGroups();
-            $('#ikarus_rep_priority').val('0');
-            $('#ikarus_rep_add').text('\u2795 Add Replacement');
-            toastr.success(`Replacement "${name || trigger}" updated`);
-            return;
-        }
-    }
-
     s().replacements.push({
         id: uid(), name: name || trigger, scope: currentRepScope,
         charId: currentRepScope === 'char' ? getCurrentCharId() : null,
@@ -517,39 +487,102 @@ function addReplacement(parentId) {
     $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
     renderReplacementTriggerGroups();
     $('#ikarus_rep_priority').val('0');
-    $('#ikarus_rep_add').text('\u2795 Add Replacement');
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
 
 function editReplacement(id) {
     const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
-    _editingReplacementId = id;
-    _editingFilterId = null;
     $('#ikarus_rep_name').val(r.name); renderReplacementTriggerGroups(normalizeReplacementTriggerGroups(r));
     $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || ''); $('#ikarus_rep_krea2').val(r.krea2 || '');
     $('#ikarus_rep_short_tag').val(r.shortTag || '');
+    $('#ikarus_rep_match').val(r.matchMode || 'OR');
     $('#ikarus_rep_mode').val(r.replaceMode || 'first'); $('#ikarus_rep_priority').val(r.priority || 0);
+    // Show/hide short tag row based on loaded mode
     $('#ikarus_rep_short_tag_row').toggle(r.replaceMode === 'first_full');
+    // Store parentId for re-adding
     $('#ikarus_rep_add').data('parent-id', r.parentId || '');
-    $('#ikarus_rep_add').text('\u270f\ufe0f Update Replacement');
-    toastr.info(`Editing "${r.name}" \u2014 modify and click Update`);
+    const idx = es.replacements.findIndex(x => x.id === id);
+    if (idx >= 0) es.replacements.splice(idx, 1);
+    saveSettingsDebounced(); renderReplacementList();
+    toastr.info(`Editing "${r.name}" â€” modify and click Add`);
 }
 
 // ==========================================================================
 // Filters â€” trigger-based with remove/append/replace actions
 // ==========================================================================
+function normalizeFilterTriggerGroups(f){if(Array.isArray(f?.triggerGroups)&&f.triggerGroups.length)return f.triggerGroups.map(g=>({trigger:String(g?.trigger||'').trim(),matchMode:['OR','AND','XOR','NOR'].includes(g?.matchMode)?g.matchMode:'OR'})).filter(g=>g.trigger);const t=String(f?.trigger||'').trim();return t?[{trigger:t,matchMode:f?.matchMode==='AND'?'AND':'OR'}]:[];}
+function renderFilterTriggerGroups(groups=[{trigger:'',matchMode:'OR'}]){const rows=groups.length?groups:[{trigger:'',matchMode:'OR'}];$('#ikarus_flt_trigger_groups').html(rows.map((g,i)=>`<div class="ikarus-trigger-group"><input class="text_pole ikarus-flt-group-trigger" value="${esc(g.trigger||'')}" placeholder="e.g. hat, shirt"><select class="text_pole ikarus-flt-group-mode"><option value="OR" ${g.matchMode==='OR'?'selected':''}>OR (any)</option><option value="AND" ${g.matchMode==='AND'?'selected':''}>AND (all)</option><option value="XOR" ${g.matchMode==='XOR'?'selected':''}>XOR (exactly one)</option><option value="NOR" ${g.matchMode==='NOR'?'selected':''}>NOR (none)</option></select>${i?'<button type="button" class="menu_button ikarus-trigger-group-remove">&times;</button>':''}</div>`).join(''));}
+function readFilterTriggerGroups(){return $('#ikarus_flt_trigger_groups .ikarus-trigger-group').map(function(){return{trigger:$(this).find('.ikarus-flt-group-trigger').val()?.trim()||'',matchMode:$(this).find('.ikarus-flt-group-mode').val()||'OR'};}).get().filter(g=>g.trigger);}
+function filterTriggerGroupsLabel(f){return normalizeFilterTriggerGroups(f).map(g=>`${g.trigger} (${g.matchMode})`).join(' AND ');}
+
+function renderFilterList() {
+    const container = $('#ikarus_filter_list');
+    if (!container.length) return;
+    const items = itemsForScope(s().filters || [], currentFltScope);
+    if (!items.length) { container.html(''); return; }
+
+    container.html(items.map(f => {
+        const transferBtn = f.scope === 'global'
+            ? `<button class="menu_button ikarus-transfer-item" title="Move to current character">ðŸ“¥</button>`
+            : `<button class="menu_button ikarus-transfer-item" title="Move to global">ðŸ“¤</button>`;
+        return `
+        <div class="ikarus-card ${f.enabled ? '' : 'disabled'}" data-id="${esc(f.id)}" data-type="filter">
+            <div class="card-header">
+                <span class="card-name">${esc(f.name || 'Unnamed')}</span>
+                <div class="card-actions">
+                    ${transferBtn}
+                    <button class="menu_button ikarus-toggle-item">${f.enabled ? 'âœ…' : 'â¬œ'}</button>
+                    <button class="menu_button ikarus-edit-item" title="Edit">âœï¸</button>
+                    <button class="menu_button ikarus-delete-item" title="Delete">ðŸ—‘ï¸</button>
+                </div>
+            </div>
+            <div class="card-details">
+                <div><b class="trigger-label">When:</b> ${esc(filterTriggerGroupsLabel(f))}</div>
+                <div><b class="${f.action === 'remove' ? 'filter-label' : 'replace-label'}">${f.action === 'remove' ? 'âœ‚ Remove:' : f.action === 'append' ? '+ Append:' : 'â‡„ Replace:'}</b> ${esc((f.actionText || f.findText || '').substring(0, 80))}</div>
+                ${f.action === 'replace' ? `<div><b class="replace-label">â†’</b> ${esc((f.actionText || '').substring(0, 80))}</div>` : ''}
+                <div>Target: ${f.target || 'positive'} | <span class="scope-badge">${f.scope === 'char' ? 'ðŸ‘¤' : 'ðŸŒ'}</span></div>
+            </div>
+        </div>`;
+    }).join(''));
+}
+
+function addFilter() {
+    const name = $('#ikarus_flt_name').val()?.trim();
+    const triggerGroups = readFilterTriggerGroups();
+    const trigger = triggerGroups[0]?.trigger || '';
+    const matchMode = triggerGroups[0]?.matchMode || 'OR';
+    const action = $('#ikarus_flt_action').val() || 'remove';
+    const actionText = $('#ikarus_flt_action_text').val()?.trim();
+    const findText = $('#ikarus_flt_find_text').val()?.trim();
+    const target = $('#ikarus_flt_target').val() || 'positive';
+
+    if (!trigger) { toastr.warning('Trigger is required'); return; }
+    if (action === 'remove' && !actionText) { toastr.warning('Pattern to remove is required'); return; }
+    if (action === 'append' && !actionText) { toastr.warning('Text to append is required'); return; }
+    if (action === 'replace' && (!findText || !actionText)) { toastr.warning('Find and Replace text required'); return; }
+
+    s().filters.push({
+        id: uid(), name: name || trigger, scope: currentFltScope,
+        charId: currentFltScope === 'char' ? getCurrentCharId() : null,
+        trigger, matchMode, triggerGroups, action, actionText: actionText || '', findText: findText || '', target, enabled: true,
+    });
+    saveSettingsDebounced(); renderFilterList();
+    $('#ikarus_flt_name, #ikarus_flt_action_text, #ikarus_flt_find_text').val('');
+    renderFilterTriggerGroups();
+    toastr.success(`Filter "${name || trigger}" added`);
+}
 
 function editFilter(id) {
     const es = s(); const f = es.filters.find(x => x.id === id); if (!f) return;
-    _editingFilterId = id;
-    _editingReplacementId = null;
     $('#ikarus_flt_name').val(f.name); renderFilterTriggerGroups(normalizeFilterTriggerGroups(f));
     $('#ikarus_flt_action').val(f.action || 'remove');
     $('#ikarus_flt_action_text').val(f.actionText || ''); $('#ikarus_flt_find_text').val(f.findText || '');
     $('#ikarus_flt_target').val(f.target || 'positive');
     updateFilterFormVisibility();
-    $('#ikarus_flt_add').text('\u270f\ufe0f Update Filter');
-    toastr.info(`Editing "${f.name}" \u2014 modify and click Update`);
+    const idx = es.filters.findIndex(x => x.id === id);
+    if (idx >= 0) es.filters.splice(idx, 1);
+    saveSettingsDebounced(); renderFilterList();
+    toastr.info(`Editing "${f.name}" â€” modify and click Add`);
 }
 
 function updateFilterFormVisibility() {
@@ -1168,17 +1201,6 @@ function closeGlobalManager() {
 }
 
 // ==========================================================================
-// /sd command safety guard
-// ==========================================================================
-function safeSdCallback(args, prompt) {
-    const cmd = SlashCommandParser.commands?.['sd'];
-    if (!cmd || typeof cmd.callback !== 'function') {
-        throw new Error('Image generation (/sd) command is not available. Ensure the Stable Diffusion extension is enabled.');
-    }
-    return cmd.callback(args, prompt);
-}
-
-// ==========================================================================
 // PROCESSING: Apply Replacements (in-place, with children priority)
 // ==========================================================================
 function applyReplacements(text) {
@@ -1211,8 +1233,7 @@ function applyReplacements(text) {
     const claimedKeywords = new Set();
 
     for (const child of allChildren) {
-        const childGroups = normalizeReplacementTriggerGroups(child);
-        const mode = (childGroups[0]?.matchMode) || child.matchMode || 'OR';
+        const mode = child.matchMode || 'OR';
 
         if (mode === 'CHILD') {
             // CHILD mode: only fire if parent fired
@@ -1284,9 +1305,10 @@ function applyFiltersToPrompt(prompt, negative) {
 
     let p = String(prompt || '');
     let n = String(negative || '');
+    // Combine for trigger matching
+    const combined = `${p} ${n}`;
 
     for (const f of rules) {
-        const combined = `${p} ${n}`;
         if (!triggerMatches(combined, f)) continue;
 
         const target = f.target || 'positive';
@@ -1434,17 +1456,10 @@ function handleGlobalSdPromptProcessing(eventData) {
             return;
         }
 
-        const originalNegative = eventData.negative_prompt || eventData.negativePrompt || '';
-        const processed = processPrompt(originalPrompt, originalNegative);
+        const processed = processPrompt(originalPrompt, '');
         if (processed.prompt !== originalPrompt) {
             eventData.prompt = processed.prompt;
             console.log(`[${EXT}] Global /sd prompt filtered before image generation`);
-        }
-        if (originalNegative && processed.negative !== originalNegative) {
-            eventData.negative_prompt = eventData.negative_prompt || eventData.negativePrompt;
-            if ('negative_prompt' in eventData) eventData.negative_prompt = processed.negative;
-            if ('negativePrompt' in eventData) eventData.negativePrompt = processed.negative;
-            console.log(`[${EXT}] Global /sd negative prompt filtered`);
         }
     } catch (error) {
         console.error(`[${EXT}] Global /sd prompt filter error:`, error);
@@ -1803,17 +1818,6 @@ ${userPrompt}`, 'Separate mode',
             return;
         }
 
-        // Safety: verify that the response still contains the core of the original message
-        // Extract a short signature from the original to validate
-        const origSignature = targetMessage.slice(0, 80).toLowerCase().trim();
-        const newSignature = result.toLowerCase().trim();
-        if (origSignature.length > 20 && !newSignature.includes(origSignature.substring(0, 40))) {
-            console.warn(`[${EXT}] Separate mode: response does not appear to contain the original message — aborting replace`);
-            if (waitToast) toastr.clear(waitToast);
-            toastr.warning('Separate mode: response appears to be a rewrite, not the original message with tags — original preserved');
-            return;
-        }
-
         if (es.autoFixPicFormat) {
             result = normalizePicPrompts(result);
         }
@@ -1843,7 +1847,7 @@ ${userPrompt}`, 'Separate mode',
             imgPrompt = processed.prompt;
             markProcessedSdPrompt(imgPrompt);
 
-            const sdResult = await safeSdCallback(
+            const sdResult = await SlashCommandParser.commands['sd'].callback(
                 { quiet: es.insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
 
             if (es.insertType === INSERT_TYPE.INLINE && typeof sdResult === 'string' && sdResult.trim()) {
@@ -1863,12 +1867,10 @@ ${userPrompt}`, 'Separate mode',
             try {
                 const cleanPattern = es.promptInjection.regex.replace(/^\/|\/[gimsuy]*$/g, '');
                 if (cleanTagsFromMessage(message, cleanPattern)) {
-                    updateMessageBlock(mesIdx, message);
-                    await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
                     await context.saveChat();
-                    console.log(`[${EXT}] Separate mode: auto-cleaned remaining tags from message`);
+                    console.log(`[${EXT}] Auto-cleaned remaining tags from message`);
                 }
-            } catch (e) { console.error(`[${EXT}] Separate mode auto-clean error:`, e); }
+            } catch (e) { console.error(`[${EXT}] Auto-clean error:`, e); }
         }
 
         if (waitToast) toastr.clear(waitToast);
@@ -2036,7 +2038,7 @@ ${userPrompt}`, 'Manual rescan',
                 imgPrompt = processed.prompt;
                 markProcessedSdPrompt(imgPrompt);
 
-                const sdResult = await safeSdCallback(
+                const sdResult = await SlashCommandParser.commands['sd'].callback(
                     { quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
 
                 if (insertType === INSERT_TYPE.INLINE && typeof sdResult === 'string' && sdResult.trim()) {
@@ -2063,8 +2065,6 @@ ${userPrompt}`, 'Manual rescan',
                 try {
                     const cleanPattern = es.promptInjection.regex.replace(/^\/|\/[gimsuy]*$/g, '');
                     if (cleanTagsFromMessage(message, cleanPattern)) {
-                        updateMessageBlock(mesIdx, message);
-                        await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
                         await context.saveChat();
                         console.log(`[${EXT}] Manual rescan: auto-cleaned message #${mesIdx}`);
                     }
@@ -2147,7 +2147,7 @@ async function handleIncomingMessage() {
                 imgPrompt = processed.prompt;
                 markProcessedSdPrompt(imgPrompt);
 
-                const result = await safeSdCallback(
+                const result = await SlashCommandParser.commands['sd'].callback(
                     { quiet: es.insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
 
                 if (es.insertType === INSERT_TYPE.INLINE && typeof result === 'string' && result.trim()) {
@@ -2170,8 +2170,6 @@ async function handleIncomingMessage() {
                 try {
                     const cleanPattern = es.promptInjection.regex.replace(/^\/|\/[gimsuy]*$/g, '');
                     if (cleanTagsFromMessage(message, cleanPattern)) {
-                        updateMessageBlock(mesIdx, message);
-                        await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
                         await context.saveChat();
                         console.log(`[${EXT}] Auto-cleaned remaining tags from message`);
                     }
@@ -2373,7 +2371,6 @@ async function runStandaloneGeneration(request='',auto=false){
         const raw=await requestStandalonePrompts(request,auto); if(_standaloneCancelled) return;
         let matches=getImagePromptMatches(normalizePicPrompts(raw||''),s().promptInjection.regex);
         if(!matches.length) throw new Error('The assistant returned no [pic prompt] entries.');
-        matches = matches.slice(0, Math.max(1, Number(es.standalone.imageCount) || 1));
         appendStandaloneChat('assistant', `Prepared ${matches.length} image prompt${matches.length===1?'':'s'}. Generation has started.`);
         $('#ikarus_standalone_progress').text(`Found ${matches.length} prompts. Generating 0 / ${matches.length}`);
         const lib=standaloneLibrary();
@@ -2381,7 +2378,7 @@ async function runStandaloneGeneration(request='',auto=false){
             if(_standaloneCancelled) break;
             const prompt=processPrompt(matches[i].prompt,'').prompt; markProcessedSdPrompt(prompt);
             $('#ikarus_standalone_status').text(`Generating ${i+1}/${matches.length}`);
-            const url=await safeSdCallback({quiet:'true'},prompt);
+            const url=await SlashCommandParser.commands['sd'].callback({quiet:'true'},prompt);
             if(typeof url==='string'&&url.trim()){lib.images.push({id:uid(),url:url.trim(),prompt,createdAt:new Date().toISOString()});saveSettingsDebounced();renderStandaloneGallery();if(i===0)$('.ikarus-standalone-tabs button[data-tab="gallery"]').trigger('click');}
             $('#ikarus_standalone_progress').text(`Generated ${i+1} / ${matches.length}`);
         }
@@ -2480,20 +2477,10 @@ async function createSettings(html) {
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
     $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`ðŸ‘¤ ${getCurrentCharName()}`); renderReplacementList(); });
     $('#ikarus_rep_add').on('click', function () {
-        if (_editingReplacementId) {
-            const orig = s().replacements.find(x => x.id === _editingReplacementId);
-            if (orig) toastr.info('Edit cancelled \u2014 rule restored');
-            _editingReplacementId = null;
-            $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
-            renderReplacementTriggerGroups();
-            $('#ikarus_rep_priority').val('0');
-            $('#ikarus_rep_add').text('\u2795 Add Replacement');
-            return;
-        }
         const pid = _addChildParentId || $(this).data('parent-id') || null;
         addReplacement(pid);
         _addChildParentId = null;
-        $('#ikarus_rep_add').text('\u2795 Add Replacement');
+        $('#ikarus_rep_add').text('Ã¢Å¾â€¢ Add Replacement');
     });
     // Show/hide dedupe tag row based on mode selection
     $('#ikarus_rep_mode').on('change', function () {
@@ -2504,18 +2491,7 @@ async function createSettings(html) {
     $('#ikarus_flt_scope_global').on('click', function () { currentFltScope = 'global'; $(this).addClass('active'); $('#ikarus_flt_scope_char').removeClass('active'); renderFilterList(); });
     $('#ikarus_flt_scope_char').on('click', function () { currentFltScope = 'char'; $(this).addClass('active'); $('#ikarus_flt_scope_global').removeClass('active'); $(this).text(`ðŸ‘¤ ${getCurrentCharName()}`); renderFilterList(); });
     renderFilterTriggerGroups();
-    $('#ikarus_flt_add').on('click', function () {
-        if (_editingFilterId) {
-            const orig = s().filters.find(x => x.id === _editingFilterId);
-            if (orig) toastr.info('Edit cancelled — filter restored');
-            _editingFilterId = null;
-            $('#ikarus_flt_name, #ikarus_flt_action_text, #ikarus_flt_find_text').val('');
-            renderFilterTriggerGroups();
-            $('#ikarus_flt_add').text('Add Filter');
-            return;
-        }
-        addFilter();
-    });
+    $('#ikarus_flt_add').on('click', addFilter);
     $('#ikarus_flt_add_group').on('click',function(){const g=readFilterTriggerGroups();g.push({trigger:'',matchMode:'OR'});renderFilterTriggerGroups(g);$('#ikarus_flt_trigger_groups .ikarus-trigger-group:last input').trigger('focus');});
     $('#ikarus_flt_trigger_groups').on('click','.ikarus-trigger-group-remove',function(){$(this).closest('.ikarus-trigger-group').remove();});
     $('#ikarus_flt_action').on('change', updateFilterFormVisibility);
