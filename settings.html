@@ -316,7 +316,7 @@
                 <input type="checkbox" id="ikarus_lora_cleaner">
                 <span>Remove duplicate A1111 LoRAs</span>
             </label>
-            <div class="ikarus-hint" style="margin-bottom:8px;">Removes repeated identical <code>&lt;lora:name:weight&gt;</code> entries. Exact repeated comma segments also remove the duplicated activation token, for example <code>&lt;lora:x:1&gt;trigger</code>.</div>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Removes only repeated identical <code>&lt;lora:name:weight&gt;</code> tokens. Activation words and all other prompt text are always preserved.</div>
             <div class="ikarus-hint" style="margin-bottom:4px;">The general cleaner runs after LoRA cleanup and can strip other duplicate tags.</div>
             <div class="ikarus-row">
                 <label>Mode</label>

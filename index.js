@@ -1405,38 +1405,20 @@ function applyDoubleCleaner(text) {
     return text;
 }
 
-// Removes duplicate A1111 LoRA entries while preserving distinct LoRAs.
-// Exact duplicate comma segments are collapsed as a unit, so
-// "<lora:x:1>trigger, <lora:x:1>trigger" becomes one complete segment.
+// Removes only duplicate A1111 <lora:name:weight> tokens.
+// Activation words and every other part of the prompt are left untouched.
 function applyDuplicateLoraCleaner(text) {
     if (s().loraCleaner === false) return text;
     const source = String(text || '');
-    const segments = source.split(',').map(x => x.trim()).filter(Boolean);
-    const seenLoras = new Set();
-    const seenSegments = new Set();
-    const output = [];
-
-    for (const segment of segments) {
-        const segmentKey = segment.toLowerCase().replace(/\s+/g, ' ');
-        const loraRegex = /<lora\s*:\s*([^:>]+)\s*:\s*([^>]+)>/gi;
-        const matches = [...segment.matchAll(loraRegex)];
-        if (!matches.length) { output.push(segment); continue; }
-
-        // Drop a repeated complete LoRA segment, including its activation token.
-        if (seenSegments.has(segmentKey)) continue;
-
-        let cleaned = segment;
-        for (const match of matches) {
-            const key = `${match[1].trim().toLowerCase()}:${match[2].trim().toLowerCase()}`;
-            if (seenLoras.has(key)) cleaned = cleaned.replace(match[0], '').trim();
-            else seenLoras.add(key);
-        }
-        seenSegments.add(segmentKey);
-        if (cleaned) output.push(cleaned);
-    }
-
-    const result = output.join(', ');
-    if (result !== source) console.log(`[${EXT}] LoRA cleaner removed duplicate A1111 LoRA entries`);
+    const seen = new Set();
+    let removed = 0;
+    const result = source.replace(/<lora\s*:\s*([^:>]+)\s*:\s*([^>]+)>/gi, (full, name, weight) => {
+        const key = `${String(name).trim().toLowerCase()}:${String(weight).trim().toLowerCase()}`;
+        if (seen.has(key)) { removed += 1; return ''; }
+        seen.add(key);
+        return full;
+    });
+    if (removed) console.log(`[${EXT}] LoRA cleaner removed ${removed} duplicate A1111 LoRA token(s)`);
     return result;
 }
 
