@@ -389,6 +389,7 @@ function saveCharPrefix() {
 // Scope helpers (shared)
 // ==========================================================================
 let currentRepScope = 'global';
+let _editingReplacementId = null;
 let currentFltScope = 'global';
 
 function itemsForScope(list, scope) {
@@ -460,6 +461,17 @@ function renderRepCard(r, isChild) {
     </div>`;
 }
 
+function resetReplacementEditor() {
+    _editingReplacementId = null;
+    _addChildParentId = null;
+    $('#ikarus_rep_add').removeData('parent-id').text('Add Replacement');
+    $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
+    $('#ikarus_rep_priority').val('0');
+    $('#ikarus_rep_mode').val('first');
+    $('#ikarus_rep_short_tag_row').hide();
+    renderReplacementTriggerGroups();
+}
+
 function addReplacement(parentId) {
     const name = $('#ikarus_rep_name').val()?.trim();
     const triggerGroups = readReplacementTriggerGroups();
@@ -471,40 +483,37 @@ function addReplacement(parentId) {
     const matchMode = triggerGroups[0]?.matchMode || 'OR';
     const replaceMode = $('#ikarus_rep_mode').val() || 'first';
     const priority = parseInt($('#ikarus_rep_priority').val()) || 0;
-
     if (!trigger) { toastr.warning('Trigger is required'); return; }
     if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
-
-    s().replacements.push({
-        id: uid(), name: name || trigger, scope: currentRepScope,
-        charId: currentRepScope === 'char' ? getCurrentCharId() : null,
-        trigger, matchMode, triggerGroups, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement,
-        shortTag: shortTag || '',
-        replaceMode, priority,
-        parentId: parentId || null, enabled: true,
-    });
-    saveSettingsDebounced(); renderReplacementList();
-    $('#ikarus_rep_name, #ikarus_rep_replacement, #ikarus_rep_caption, #ikarus_rep_krea2, #ikarus_rep_short_tag').val('');
-    renderReplacementTriggerGroups();
-    $('#ikarus_rep_priority').val('0');
+    const existing = _editingReplacementId ? s().replacements.find(r => r.id === _editingReplacementId) : null;
+    const ruleData = { name: name || trigger, trigger, matchMode, triggerGroups, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement, shortTag: shortTag || '', replaceMode, priority };
+    if (existing) {
+        Object.assign(existing, ruleData);
+        saveSettingsDebounced(); renderReplacementList(); resetReplacementEditor();
+        toastr.success(`Replacement "${name || trigger}" updated`);
+        return;
+    }
+    s().replacements.push({ id: uid(), ...ruleData, scope: currentRepScope, charId: currentRepScope === 'char' ? getCurrentCharId() : null, parentId: parentId || null, enabled: true, folder: '' });
+    saveSettingsDebounced(); renderReplacementList(); resetReplacementEditor();
     toastr.success(`Replacement "${name || trigger}" added${parentId ? ' as child' : ''}`);
 }
 
 function editReplacement(id) {
-    const es = s(); const r = es.replacements.find(x => x.id === id); if (!r) return;
-    $('#ikarus_rep_name').val(r.name); renderReplacementTriggerGroups(normalizeReplacementTriggerGroups(r));
-    $('#ikarus_rep_replacement').val(r.replacement); $('#ikarus_rep_caption').val(r.caption || ''); $('#ikarus_rep_krea2').val(r.krea2 || '');
+    const r = s().replacements.find(x => x.id === id);
+    if (!r) return;
+    _editingReplacementId = r.id;
+    _addChildParentId = null;
+    $('#ikarus_rep_add').removeData('parent-id').text('Update Replacement');
+    $('#ikarus_rep_name').val(r.name);
+    renderReplacementTriggerGroups(normalizeReplacementTriggerGroups(r));
+    $('#ikarus_rep_replacement').val(r.replacement);
+    $('#ikarus_rep_caption').val(r.caption || '');
+    $('#ikarus_rep_krea2').val(r.krea2 || '');
     $('#ikarus_rep_short_tag').val(r.shortTag || '');
-    $('#ikarus_rep_match').val(r.matchMode || 'OR');
-    $('#ikarus_rep_mode').val(r.replaceMode || 'first'); $('#ikarus_rep_priority').val(r.priority || 0);
-    // Show/hide short tag row based on loaded mode
+    $('#ikarus_rep_mode').val(r.replaceMode || 'first');
+    $('#ikarus_rep_priority').val(r.priority || 0);
     $('#ikarus_rep_short_tag_row').toggle(r.replaceMode === 'first_full');
-    // Store parentId for re-adding
-    $('#ikarus_rep_add').data('parent-id', r.parentId || '');
-    const idx = es.replacements.findIndex(x => x.id === id);
-    if (idx >= 0) es.replacements.splice(idx, 1);
-    saveSettingsDebounced(); renderReplacementList();
-    toastr.info(`Editing "${r.name}" — modify and click Add`);
+    toastr.info(`Editing "${r.name}" - modify and click Update`);
 }
 
 // ==========================================================================
@@ -2477,10 +2486,7 @@ async function createSettings(html) {
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
     $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderReplacementList(); });
     $('#ikarus_rep_add').on('click', function () {
-        const pid = _addChildParentId || $(this).data('parent-id') || null;
-        addReplacement(pid);
-        _addChildParentId = null;
-        $('#ikarus_rep_add').text('âž• Add Replacement');
+        addReplacement(_editingReplacementId ? null : _addChildParentId);
     });
     // Show/hide dedupe tag row based on mode selection
     $('#ikarus_rep_mode').on('change', function () {
@@ -2529,8 +2535,10 @@ async function createSettings(html) {
     $(document).on('click', '.ikarus-add-child', function () {
         const parentId = $(this).closest('.ikarus-card').data('id');
         const parentName = s().replacements.find(r => r.id === parentId)?.name || '';
+        _editingReplacementId = null;
         _addChildParentId = parentId;
-        $('#ikarus_rep_add').text(`âž• Add Child of "${parentName}"`);
+        $('#ikarus_rep_add').removeData('parent-id').text(`Add Child of "${parentName}"`);
+        renderReplacementTriggerGroups();
         $('#ikarus_rep_name').focus();
         toastr.info(`Adding child for "${parentName}". Fill the form and click Add.`);
     });
