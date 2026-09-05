@@ -46,8 +46,12 @@
                     <label for="ikarus_separate_context_size">Context Messages</label>
                     <input id="ikarus_separate_context_size" class="text_pole widthUnset" type="number" min="0" max="999" value="1">
                 </div>
-                <div class="ikarus-hint" style="margin-top:2px;">How many past AI messages to include in the second API call. 0 = all AI messages, 1 = only the last AI message, 2+ = last N AI messages (user messages are skipped when counting).</div>
-                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call returns only [pic prompt="..."] tags. Ikarus appends them to the untouched message, so the model cannot rewrite the roleplay or HTML. You can use a different, cheaper model for the second call.</div>
+                <div class="ikarus-hint" style="margin-top:2px;">How many messages to use. 0 = everything before the target, 1 = target only, 2+ = target plus previous messages as context.</div>
+                <div class="ikarus-row" style="margin-top:4px;">
+                    <label for="ikarus_separate_image_count">Images per message</label>
+                    <input id="ikarus_separate_image_count" class="text_pole widthUnset" type="number" min="1" max="10" value="1">
+                </div>
+                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call creates hidden image prompts. Ikarus parses them off-screen, generates the images, and appends only the images after the untouched message. Default: one image to reduce rate-limit errors. You can use a different, cheaper model for the second call.</div>
             </div>
             <div class="ikarus-standalone-options" style="display:none;">
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>
