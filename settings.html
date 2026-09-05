@@ -47,7 +47,7 @@
                     <input id="ikarus_separate_context_size" class="text_pole widthUnset" type="number" min="0" max="999" value="1">
                 </div>
                 <div class="ikarus-hint" style="margin-top:2px;">How many past AI messages to include in the second API call. 0 = all AI messages, 1 = only the last AI message, 2+ = last N AI messages (user messages are skipped when counting).</div>
-                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call reads the message and re-outputs it with [pic prompt="..."] tags inserted. You can use a different, cheaper model for the second call.</div>
+                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call returns only [pic prompt="..."] tags. Ikarus appends them to the untouched message, so the model cannot rewrite the roleplay or HTML. You can use a different, cheaper model for the second call.</div>
             </div>
             <div class="ikarus-standalone-options" style="display:none;">
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>
@@ -65,6 +65,7 @@
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_hide_bubble"><span>Hide standalone bubble</span></label>
                 <label>Additional standalone system prompt</label><textarea id="ikarus_standalone_system" class="text_pole textarea_compact" rows="3" placeholder="Optional art direction and image sequencing rules"></textarea>
                 <button id="ikarus_standalone_open" class="menu_button" style="width:100%">Open Standalone Image Studio</button>
+                <button id="ikarus_standalone_open_gallery" class="menu_button" style="width:100%;margin-top:5px">Open Gallery Centered</button>
                 <div class="ikarus-hint">Does not rewrite roleplay, inject tags into roleplay, or attach images to messages. Gallery data is isolated per chat.</div>
             </div>
 
@@ -327,6 +328,19 @@
                     placeholder="e.g. 1girl, solo, pink_hair"></textarea>
                 <div class="ikarus-hint">Only duplicates of these specific tags will be removed</div>
             </div>
+        </div>
+        <div class="ikarus-section ikarus-prompt-tester">
+            <div class="ikarus-section-title"><span class="icon"></span> Prompt Processing Tester</div>
+            <div class="ikarus-hint">Tests the current character prefix, replacements, filters, processing order, and double cleaner without generating an image.</div>
+            <label for="ikarus_test_prompt_input">Input prompt</label>
+            <textarea id="ikarus_test_prompt_input" class="text_pole textarea_compact" rows="3" placeholder="Character is eating an ice cream in a business suit"></textarea>
+            <label for="ikarus_test_negative_input">Input negative prompt (optional)</label>
+            <textarea id="ikarus_test_negative_input" class="text_pole textarea_compact" rows="2"></textarea>
+            <button id="ikarus_test_prompt_run" class="menu_button" type="button">Run tester</button>
+            <label for="ikarus_test_prompt_output">Final positive prompt</label>
+            <textarea id="ikarus_test_prompt_output" class="text_pole textarea_compact" rows="4" readonly></textarea>
+            <label for="ikarus_test_negative_output">Final negative prompt</label>
+            <textarea id="ikarus_test_negative_output" class="text_pole textarea_compact" rows="2" readonly></textarea>
         </div>
 
     </div>

@@ -667,3 +667,17 @@
 .ikarus-trigger-group input, .ikarus-trigger-group select { width:100%; }
 .ikarus-trigger-group-remove { min-width:36px; padding:5px !important; }
 .ikarus-add-trigger-group { width:100%; margin-bottom:5px; }
+
+
+/* Prompt tester, centered gallery launcher, and mobile resizing */
+.ikarus-prompt-tester textarea[readonly]{background:rgba(0,0,0,.28);border-color:rgba(128,224,255,.28);min-height:70px}
+.ikarus-prompt-tester #ikarus_test_prompt_run{width:100%;margin:7px 0}
+#ikarus_standalone_window.ikarus-centered{max-width:96vw;max-height:94vh}
+#ikarus_gallery_menu_btn{cursor:pointer}
+.mes_button_ikarus_image{color:var(--SmartThemeBodyColor);cursor:pointer}
+@media(max-width:600px){
+ #ikarus_standalone_window,#ikarus_standalone_window.ikarus-centered{width:96vw!important;height:86vh!important;min-width:0!important;min-height:300px!important;max-width:98vw!important;max-height:94vh!important}
+ #ikarus_standalone_window.ikarus-centered{left:50%!important;top:50%!important;bottom:auto!important;transform:translate(-50%,-50%)!important}
+ .ikarus-resize-grip{width:38px;height:38px}
+ .ikarus-standalone-toolbar{max-height:34vh;overflow:auto}
+}
