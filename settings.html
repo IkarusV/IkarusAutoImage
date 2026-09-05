@@ -312,8 +312,12 @@
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">
 
             <div class="ikarus-section-title" style="font-size:11px;"><span class="icon"></span> Double Cleaner</div>
-            <div class="ikarus-hint" style="margin-bottom:4px;">Runs after all replacements and filters. Strips
-                duplicate tags from the final prompt.</div>
+            <label class="ikarus-toggle">
+                <input type="checkbox" id="ikarus_lora_cleaner">
+                <span>Remove duplicate A1111 LoRAs</span>
+            </label>
+            <div class="ikarus-hint" style="margin-bottom:8px;">Removes repeated identical <code>&lt;lora:name:weight&gt;</code> entries. Exact repeated comma segments also remove the duplicated activation token, for example <code>&lt;lora:x:1&gt;trigger</code>.</div>
+            <div class="ikarus-hint" style="margin-bottom:4px;">The general cleaner runs after LoRA cleanup and can strip other duplicate tags.</div>
             <div class="ikarus-row">
                 <label>Mode</label>
                 <select id="ikarus_dc_mode" class="text_pole">

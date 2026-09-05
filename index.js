@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS = {
     invertProcessingOrder: false, // false = replacements first, true = filters first
     // Double cleaner: strips duplicate tags after all processing
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
+    loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -185,6 +186,7 @@ function ensureSettings() {
     if (es.replacementsEnabled === undefined) es.replacementsEnabled = true;
     if (es.invertProcessingOrder === undefined) es.invertProcessingOrder = false;
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
+    if (es.loraCleaner === undefined) es.loraCleaner = true;
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
@@ -221,6 +223,7 @@ function updateUI() {
         $('#ikarus_filter_native_sd').prop('checked', es.filterNativeSd);
         $('#ikarus_filter_imagine').prop('checked', es.filterImagine);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
+        $('#ikarus_lora_cleaner').prop('checked', es.loraCleaner !== false);
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
         $('#ikarus_generation_mode').val(es.generationMode || 'together');
@@ -1402,6 +1405,41 @@ function applyDoubleCleaner(text) {
     return text;
 }
 
+// Removes duplicate A1111 LoRA entries while preserving distinct LoRAs.
+// Exact duplicate comma segments are collapsed as a unit, so
+// "<lora:x:1>trigger, <lora:x:1>trigger" becomes one complete segment.
+function applyDuplicateLoraCleaner(text) {
+    if (s().loraCleaner === false) return text;
+    const source = String(text || '');
+    const segments = source.split(',').map(x => x.trim()).filter(Boolean);
+    const seenLoras = new Set();
+    const seenSegments = new Set();
+    const output = [];
+
+    for (const segment of segments) {
+        const segmentKey = segment.toLowerCase().replace(/\s+/g, ' ');
+        const loraRegex = /<lora\s*:\s*([^:>]+)\s*:\s*([^>]+)>/gi;
+        const matches = [...segment.matchAll(loraRegex)];
+        if (!matches.length) { output.push(segment); continue; }
+
+        // Drop a repeated complete LoRA segment, including its activation token.
+        if (seenSegments.has(segmentKey)) continue;
+
+        let cleaned = segment;
+        for (const match of matches) {
+            const key = `${match[1].trim().toLowerCase()}:${match[2].trim().toLowerCase()}`;
+            if (seenLoras.has(key)) cleaned = cleaned.replace(match[0], '').trim();
+            else seenLoras.add(key);
+        }
+        seenSegments.add(segmentKey);
+        if (cleaned) output.push(cleaned);
+    }
+
+    const result = output.join(', ');
+    if (result !== source) console.log(`[${EXT}] LoRA cleaner removed duplicate A1111 LoRA entries`);
+    return result;
+}
+
 // ==========================================================================
 // Text utilities
 // ==========================================================================
@@ -1436,7 +1474,9 @@ function processPrompt(prompt, negative) {
         const fResult = applyFiltersToPrompt(p, n); p = fResult.prompt; n = fResult.negative;
     }
 
-    // Double cleaner runs last
+    // Dedicated LoRA dedupe and general double cleaner run last.
+    p = applyDuplicateLoraCleaner(p);
+    n = applyDuplicateLoraCleaner(n);
     p = applyDoubleCleaner(p);
     n = applyDoubleCleaner(n);
 
@@ -2498,6 +2538,7 @@ async function createSettings(html) {
     $('#ikarus_auto_fix_pic').on('change', function () { s().autoFixPicFormat = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_filter_native_sd').on('change', function () { s().filterNativeSd = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_filter_imagine').on('change', function () { s().filterImagine = $(this).prop('checked'); ensureImagineCommandWrapped(); saveSettingsDebounced(); });
+    $('#ikarus_lora_cleaner').on('change', function () { s().loraCleaner = $(this).prop('checked'); saveSettingsDebounced(); updatePromptTester(); });
     $('#ikarus_dc_mode').on('change', function () {
         s().doubleCleaner.mode = $(this).val(); saveSettingsDebounced();
         $('#ikarus_dc_tags_row').toggle($(this).val() === 'listed');
