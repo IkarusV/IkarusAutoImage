@@ -51,7 +51,7 @@
                     <label for="ikarus_separate_image_count">Images per message</label>
                     <input id="ikarus_separate_image_count" class="text_pole widthUnset" type="number" min="1" max="10" value="1">
                 </div>
-                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). After the message finishes, a second API call creates hidden image prompts. Ikarus parses them off-screen, generates the images, and appends only the images after the untouched message. Default: one image to reduce rate-limit errors. You can use a different, cheaper model for the second call.</div>
+                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). Separate mode asks the roleplay AI to place lightweight slots such as <code>[image1]</code> after relevant paragraphs. After the response, a second AI creates ordered prompts off-screen; Ikarus generates each image and replaces only its exact slot. Story text and HTML are never rewritten. You can use a different, cheaper model for the second call.</div>
             </div>
             <div class="ikarus-standalone-options" style="display:none;">
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>

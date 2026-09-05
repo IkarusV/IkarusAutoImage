@@ -1571,19 +1571,61 @@ function getPromptInjectionText() {
     return { promptText, charPrompt };
 }
 
+function getSeparateSlotInstruction() {
+    const count = Math.max(1, Math.min(10, Number(s().separateImageCount) || 1));
+    const slots = Array.from({ length: count }, (_, i) => `[image${i + 1}]`).join(', ');
+    return `Separate image mode: place exactly ${count} image slot marker${count === 1 ? '' : 's'} in your roleplay response: ${slots}. Place each marker on its own line after the paragraph or scene it illustrates, in chronological order. Use every marker exactly once. Do not write image prompts, URLs, Markdown images, HTML, or explanations inside the markers. The markers will be replaced with generated images after your response is complete.`;
+}
+
+function getSeparateSlots(text, requestedCount) {
+    const found = [];
+    const seen = new Set();
+    const regex = /\[image\s*(\d+)\]/gi;
+    for (const match of String(text || '').matchAll(regex)) {
+        const number = Number(match[1]);
+        if (!Number.isInteger(number) || number < 1 || number > requestedCount || seen.has(number)) continue;
+        seen.add(number);
+        found.push({ number, marker: match[0], index: match.index });
+    }
+    return found.sort((a, b) => a.index - b.index);
+}
+
+function parseSeparatePromptPlan(raw, slots) {
+    const text = String(raw || '').trim();
+    let parsed = null;
+    const candidates = [text, text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '')];
+    const arrayMatch = text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) candidates.push(arrayMatch[0]);
+    for (const candidate of candidates) {
+        try { const value = JSON.parse(candidate); if (Array.isArray(value)) { parsed = value; break; } } catch { }
+    }
+    if (!parsed) {
+        // Defensive fallback for models that return "image1 = prompt" despite the JSON instruction.
+        parsed = [...text.matchAll(/image\s*(\d+)\s*[:=]\s*["']?([^\n"']+)/gi)].map(m => ({ slot: Number(m[1]), prompt: m[2].trim() }));
+    }
+    const available = new Set(slots.map(x => x.number));
+    const used = new Set();
+    return (parsed || []).map(item => ({ slot: Number(item?.slot ?? item?.image), prompt: String(item?.prompt || '').trim() }))
+        .filter(item => available.has(item.slot) && item.prompt && !used.has(item.slot) && used.add(item.slot));
+}
+
 function syncPromptInjection() {
     try {
         const es = s();
         const enabled = es.promptInjection?.enabled && es.insertType !== INSERT_TYPE.DISABLED;
-        const isSeparate = es.generationMode === 'separate' || es.generationMode === 'standalone';
+        const isSeparate = es.generationMode === 'separate';
+        const isStandalone = es.generationMode === 'standalone';
         const isAppendUser = es.promptInjection?.position === 'append_user';
         const isMacro = es.promptInjection?.position === 'macro';
         const { promptText, charPrompt } = enabled ? getPromptInjectionText() : { promptText: '', charPrompt: '' };
         const depth = Number(es.promptInjection?.depth || 0);
 
         if (isSeparate) {
+            const slotPrompt = enabled && es.separateEnabled ? getSeparateSlotInstruction() : '';
+            setExtensionPrompt(PROMPT_KEY, slotPrompt, extension_prompt_types.IN_CHAT, depth, false, getExtensionPromptRole());
+            console.log(`[${EXT}] Separate mode: ${slotPrompt ? 'image-slot instruction registered' : 'image-slot instruction cleared'}`);
+        } else if (isStandalone) {
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
-            console.log(`[${EXT}] Separate mode: prompt injection cleared (will use second API call)`);
         } else if (isMacro) {
             // Clear native prompt — macro mode handles injection via {{IkarusAutoImage-prompt}} macro replacement
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
@@ -1795,74 +1837,81 @@ async function handleSeparateMode(targetIndex = null) {
     const message = context.chat[mesIdx];
     if (!message || !(message.mes || '').trim()) return;
 
-    const { promptText } = getPromptInjectionText();
-    if (!promptText.trim()) { toastr.warning('Separate mode: no prompt template configured'); return; }
+    const imageCount = Math.max(1, Math.min(10, Number(es.separateImageCount) || 1));
+    const originalMessage = message.mes;
+    let slots = getSeparateSlots(originalMessage, imageCount);
+    const isManualSelection = Number.isInteger(targetIndex);
+    if (!slots.length && isManualSelection) {
+        // Old/selected messages may predate slot mode. Virtual slots append their images at the end.
+        slots = Array.from({ length: imageCount }, (_, i) => ({ number: i + 1, marker: '', index: originalMessage.length + i }));
+    }
+    if (!slots.length) {
+        console.warn(`[${EXT}] Separate mode: response contains no [imageN] slots`);
+        toastr.warning('Separate mode: the response had no image slots. No text was changed.');
+        return;
+    }
+
     const contextSize = Math.max(0, Number(es.separateContextSize ?? 1));
     const preceding = context.chat.slice(0, mesIdx).filter(m => m?.mes);
     const contextMessages = contextSize === 0 ? preceding : preceding.slice(-Math.max(0, contextSize - 1));
     const contextBlock = contextMessages.map((m, i) => `CONTEXT ONLY ${i + 1} (${m.is_user ? 'user' : 'character'}):\n${m.mes}`).join('\n\n---\n\n');
-    const targetMessage = message.mes;
-    const imageCount = Math.max(1, Math.min(10, Number(es.separateImageCount) || 1));
-    const userPrompt = `Create exactly ${imageCount} image prompt${imageCount === 1 ? '' : 's'} for the TARGET MESSAGE only. Earlier messages are context only. Return only [pic prompt="..."] tags, one per useful visual beat. Do not repeat, rewrite, quote, summarize, or wrap the target message.\n\n<context>\n${contextBlock}\n</context>\n\n<target_message>\n${targetMessage}\n</target_message>`;
-    const systemPrompt = `${promptText}\n\nCritical output rule: output image tags only. Never reproduce the source message or HTML.`;
-    const messages = [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }];
+    const slotList = slots.map(x => x.number).join(', ');
+    const { promptText } = getPromptInjectionText();
+    const systemPrompt = `You are an image prompt planner. Return strict JSON only, with no Markdown or commentary. Output one object for each requested slot using this exact schema: [{"slot":1,"prompt":"visual description"}]. The prompt must describe the visual moment immediately before its slot in the target message. Preserve chronological order. Never rewrite the story.\n\nImage-prompt guidance:\n${promptText}`;
+    const userPrompt = `Create prompts only for slots ${slotList}. Messages after TARGET MESSAGE are intentionally excluded.\n\n<context>\n${contextBlock}\n</context>\n\n<TARGET_MESSAGE>\n${originalMessage}\n</TARGET_MESSAGE>`;
     const profileId = es.separateProfile || '';
     let waitToast = null;
     try {
-        waitToast = toastr.info('Separate mode: creating image prompts...', 'Ikarus', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
-        const response = await sendRequestWithNativeFallback(context, profileId, messages, { stream: false }, `${systemPrompt}\n\n${userPrompt}`, 'Separate mode');
-        let result = '';
+        waitToast = toastr.info(`Separate mode: planning ${slots.length} slotted image(s)...`, 'Ikarus', { timeOut: 0, extendedTimeOut: 0, tapToDismiss: false });
+        const response = await sendRequestWithNativeFallback(context, profileId, [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }], { stream: false }, `${systemPrompt}\n\n${userPrompt}`, 'Separate mode');
+        let raw = '';
         if (typeof response === 'function') {
             const generator = response();
-            for await (const chunk of generator) if (chunk?.text !== undefined) result = chunk.text;
-        } else if (response && typeof response === 'object') result = response.content || response.text || String(response);
-        else result = String(response || '');
-        if (es.autoFixPicFormat) result = normalizePicPrompts(result);
-        const matches = getImagePromptMatches(result, es.promptInjection.regex).slice(0, imageCount);
-        if (!matches.length) { toastr.warning('Separate mode: no image prompts were returned'); return; }
+            for await (const chunk of generator) if (chunk?.text !== undefined) raw = chunk.text;
+        } else if (response && typeof response === 'object') raw = response.content || response.text || String(response);
+        else raw = String(response || '');
+        const plan = parseSeparatePromptPlan(raw, slots);
+        if (!plan.length) { toastr.warning('Separate mode: the planner returned no valid slot prompts'); return; }
 
-        // Prompts stay off-screen. Only successfully generated images are appended to the message.
-        const generatedImages = [];
-        for (const match of matches) {
-            const imgPrompt = processPrompt(match.prompt, '').prompt;
-            if (!imgPrompt.trim()) continue;
-            markProcessedSdPrompt(imgPrompt);
-            const sd = SlashCommandParser.commands?.['sd'];
-            if (!sd?.callback) throw new Error('/sd image generation is unavailable');
+        const generated = new Map();
+        if (!message.extra || typeof message.extra !== 'object') message.extra = {};
+        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+        const sd = SlashCommandParser.commands?.['sd'];
+        if (!sd?.callback) throw new Error('/sd image generation is unavailable');
+        for (const item of plan) {
+            const prompt = processPrompt(item.prompt, '').prompt;
+            if (!prompt) continue;
+            markProcessedSdPrompt(prompt);
             try {
-                // Native /imagine expects image_swipes for command generations even in quiet mode.
-                // Build it before invoking the callback; the prompt remains off-screen.
-                if (!message.extra || typeof message.extra !== 'object') message.extra = {};
-                if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
-                const url = await sd.callback({ quiet: 'true', gallery: 'false' }, imgPrompt);
-                if (typeof url === 'string' && url.trim()) generatedImages.push({ url: url.trim(), prompt: imgPrompt });
+                const url = await sd.callback({ quiet: 'true', gallery: 'false' }, prompt);
+                if (typeof url === 'string' && url.trim()) generated.set(item.slot, { url: url.trim(), prompt });
             } catch (imageError) {
-                console.error(`[${EXT}] Separate mode image generation failed:`, imageError);
-                if (/too many requests|429/i.test(String(imageError?.message || imageError))) {
-                    toastr.warning('Image provider rate limit reached. Remaining images were stopped.');
-                    break;
-                }
+                console.error(`[${EXT}] Separate slot ${item.slot} generation failed:`, imageError);
+                if (/too many requests|429/i.test(String(imageError?.message || imageError))) { toastr.warning('Image provider rate limit reached. Remaining slots were stopped.'); break; }
                 throw imageError;
             }
         }
+        if (!generated.size) { toastr.warning('Separate mode: no images were returned'); return; }
 
-        if (!generatedImages.length) {
-            toastr.warning('Separate mode: the prompts were created, but no images were returned');
-            return;
+        let finalMessage = originalMessage;
+        for (const slot of slots) {
+            const image = generated.get(slot.number);
+            if (!image) continue; // Failed slots remain visible so they can be retried.
+            const html = `<img src="${esc(image.url)}" alt="Generated image ${slot.number}">`;
+            if (slot.marker) finalMessage = finalMessage.replace(slot.marker, html);
+            else finalMessage += `\n\n${html}`;
         }
-
-        // Preserve the original message byte-for-byte, then append image HTML after a new line.
-        const imageHtml = generatedImages.map(x => `<img src="${esc(x.url)}" alt="Generated image">`).join('\n');
-        message.mes = `${targetMessage.replace(/\s+$/, '')}\n\n${imageHtml}`;
-        if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = message.mes;
-        if (!message.extra || typeof message.extra !== 'object') message.extra = {};
-        message.extra.ikarus_image_prompts = generatedImages.map(x => x.prompt);
+        message.mes = finalMessage;
+        if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = finalMessage;
+        message.extra.ikarus_image_prompts = [...generated.entries()].map(([slot, image]) => ({ slot, prompt: image.prompt }));
         updateMessageBlock(mesIdx, message);
         await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
         await context.saveChat();
-        toastr.success(`${generatedImages.length} image(s) appended to selected message`);
-    } catch (e) { toastr.error(`Separate mode: ${e.message || e}`); console.error(`[${EXT}] Separate mode error:`, e); }
-    finally { if (waitToast) toastr.clear(waitToast); }
+        toastr.success(`${generated.size} image slot${generated.size === 1 ? '' : 's'} filled`);
+    } catch (e) {
+        toastr.error(`Separate mode: ${e.message || e}`);
+        console.error(`[${EXT}] Separate mode error:`, e);
+    } finally { if (waitToast) toastr.clear(waitToast); }
 }
 
 // ==========================================================================
@@ -2435,6 +2484,7 @@ async function createSettings(html) {
     });
     $('#ikarus_separate_enabled').on('change', function () {
         s().separateEnabled = $(this).prop('checked');
+        syncPromptInjection();
         saveSettingsDebounced();
     });
     $('#ikarus_separate_context_size').on('input', function () {
@@ -2444,6 +2494,7 @@ async function createSettings(html) {
     $('#ikarus_separate_image_count').on('change', function () {
         s().separateImageCount = Math.max(1, Math.min(10, parseInt($(this).val()) || 1));
         $(this).val(s().separateImageCount);
+        syncPromptInjection();
         saveSettingsDebounced();
     });
     $('#ikarus_standalone_auto').on('change', function(){s().standalone.auto=$(this).prop('checked');saveSettingsDebounced();renderStandaloneGallery();});
