@@ -67,6 +67,9 @@ const DEFAULT_SETTINGS = {
     separateProfile: '', // connection profile ID for separate mode (empty = current)
     separateContextSize: 1, // 0 = all messages, N = target plus previous context messages
     separateImageCount: 1, // maximum images generated per separate-mode request
+    separateSlotPrompt: 'Separate image mode: place exactly {{image_count}} image slot marker(s) in your roleplay response: {{image_slots}}. Place each marker on its own line after the paragraph or scene it illustrates, in chronological order. Use every marker exactly once. Do not write image prompts, URLs, Markdown images, HTML, or explanations inside the markers. The markers will be replaced with generated images after your response is complete.',
+    separatePromptPosition: 'deep_system',
+    separatePromptDepth: 0,
     separateEnabled: true, // whether separate mode second API call is active
 };
 
@@ -196,6 +199,9 @@ function ensureSettings() {
     if (es.separateProfile === undefined) es.separateProfile = DEFAULT_SETTINGS.separateProfile;
     if (es.separateContextSize === undefined) es.separateContextSize = DEFAULT_SETTINGS.separateContextSize;
     if (es.separateImageCount === undefined) es.separateImageCount = DEFAULT_SETTINGS.separateImageCount;
+    if (es.separateSlotPrompt === undefined) es.separateSlotPrompt = DEFAULT_SETTINGS.separateSlotPrompt;
+    if (!['deep_system','deep_user','deep_assistant'].includes(es.separatePromptPosition)) es.separatePromptPosition = DEFAULT_SETTINGS.separatePromptPosition;
+    if (es.separatePromptDepth === undefined) es.separatePromptDepth = DEFAULT_SETTINGS.separatePromptDepth;
     if (es.separateEnabled === undefined) es.separateEnabled = DEFAULT_SETTINGS.separateEnabled;
     if (!es.standalone || typeof es.standalone !== 'object') es.standalone = JSON.parse(JSON.stringify(DEFAULT_SETTINGS.standalone));
     for (const [k,v] of Object.entries(DEFAULT_SETTINGS.standalone)) if (es.standalone[k] === undefined) es.standalone[k] = JSON.parse(JSON.stringify(v));
@@ -239,6 +245,9 @@ function updateUI() {
         $('#ikarus_separate_enabled').prop('checked', es.separateEnabled !== false);
         $('#ikarus_separate_context_size').val(es.separateContextSize ?? 1);
         $('#ikarus_separate_image_count').val(es.separateImageCount ?? 1);
+        $('#ikarus_separate_slot_prompt').val(es.separateSlotPrompt || DEFAULT_SETTINGS.separateSlotPrompt);
+        $('#ikarus_separate_prompt_position').val(es.separatePromptPosition || 'deep_system');
+        $('#ikarus_separate_prompt_depth').val(es.separatePromptDepth ?? 0);
         populateProfileDropdown();
     }
     renderPresetDropdown();
@@ -1574,7 +1583,18 @@ function getPromptInjectionText() {
 function getSeparateSlotInstruction() {
     const count = Math.max(1, Math.min(10, Number(s().separateImageCount) || 1));
     const slots = Array.from({ length: count }, (_, i) => `[image${i + 1}]`).join(', ');
-    return `Separate image mode: place exactly ${count} image slot marker${count === 1 ? '' : 's'} in your roleplay response: ${slots}. Place each marker on its own line after the paragraph or scene it illustrates, in chronological order. Use every marker exactly once. Do not write image prompts, URLs, Markdown images, HTML, or explanations inside the markers. The markers will be replaced with generated images after your response is complete.`;
+    const template = s().separateSlotPrompt || DEFAULT_SETTINGS.separateSlotPrompt;
+    return String(template)
+        .replace(/\{\{\s*image_count\s*\}\}/gi, String(count))
+        .replace(/\{\{\s*image_slots\s*\}\}/gi, slots);
+}
+
+function getSeparatePromptRole() {
+    switch (s().separatePromptPosition) {
+        case 'deep_user': return extension_prompt_roles.USER;
+        case 'deep_assistant': return extension_prompt_roles.ASSISTANT;
+        default: return extension_prompt_roles.SYSTEM;
+    }
 }
 
 function getSeparateSlots(text, requestedCount) {
@@ -1622,7 +1642,7 @@ function syncPromptInjection() {
 
         if (isSeparate) {
             const slotPrompt = enabled && es.separateEnabled ? getSeparateSlotInstruction() : '';
-            setExtensionPrompt(PROMPT_KEY, slotPrompt, extension_prompt_types.IN_CHAT, depth, false, getExtensionPromptRole());
+            setExtensionPrompt(PROMPT_KEY, slotPrompt, extension_prompt_types.IN_CHAT, Number(es.separatePromptDepth || 0), false, getSeparatePromptRole());
             console.log(`[${EXT}] Separate mode: ${slotPrompt ? 'image-slot instruction registered' : 'image-slot instruction cleared'}`);
         } else if (isStandalone) {
             setExtensionPrompt(PROMPT_KEY, '', extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
@@ -2503,6 +2523,10 @@ async function createSettings(html) {
         syncPromptInjection();
         saveSettingsDebounced();
     });
+    $('#ikarus_separate_slot_prompt').on('input', function () { s().separateSlotPrompt = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_separate_prompt_position').on('change', function () { s().separatePromptPosition = $(this).val(); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_separate_prompt_depth').on('input', function () { s().separatePromptDepth = Math.max(0, parseInt($(this).val()) || 0); syncPromptInjection(); saveSettingsDebounced(); });
+    $('#ikarus_separate_slot_reset').on('click', function () { s().separateSlotPrompt = DEFAULT_SETTINGS.separateSlotPrompt; $('#ikarus_separate_slot_prompt').val(s().separateSlotPrompt); syncPromptInjection(); saveSettingsDebounced(); });
     $('#ikarus_standalone_auto').on('change', function(){s().standalone.auto=$(this).prop('checked');saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_context').on('change',function(){s().standalone.contextSize=Math.max(0,parseInt($(this).val())||0);$('#ikarus_window_context').val(s().standalone.contextSize);saveSettingsDebounced();renderStandaloneGallery();});
     $('#ikarus_standalone_count').on('change',function(){s().standalone.imageCount=Math.max(1,parseInt($(this).val())||1);saveSettingsDebounced();renderStandaloneGallery();});

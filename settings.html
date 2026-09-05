@@ -51,7 +51,15 @@
                     <label for="ikarus_separate_image_count">Images per message</label>
                     <input id="ikarus_separate_image_count" class="text_pole widthUnset" type="number" min="1" max="10" value="1">
                 </div>
-                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">Separate mode: first API call generates pure RP text (no image prompts injected). Separate mode asks the roleplay AI to place lightweight slots such as <code>[image1]</code> after relevant paragraphs. After the response, a second AI creates ordered prompts off-screen; Ikarus generates each image and replaces only its exact slot. Story text and HTML are never rewritten. You can use a different, cheaper model for the second call.</div>
+                <label for="ikarus_separate_slot_prompt" style="margin-top:7px;display:block;">Image-slot instruction</label>
+                <textarea id="ikarus_separate_slot_prompt" class="text_pole textarea_compact" rows="5"></textarea>
+                <div class="ikarus-hint">Macros: <code>{{image_count}}</code> = configured image count; <code>{{image_slots}}</code> = complete marker list such as <code>[image1], [image2], [image3]</code>.</div>
+                <div class="ikarus-row" style="margin-top:5px;">
+                    <div><label for="ikarus_separate_prompt_position">Slot prompt role</label><select id="ikarus_separate_prompt_position" class="text_pole"><option value="deep_system">System</option><option value="deep_user">User</option><option value="deep_assistant">Assistant</option></select></div>
+                    <div><label for="ikarus_separate_prompt_depth">Depth</label><input id="ikarus_separate_prompt_depth" class="text_pole widthUnset" type="number" min="0" max="100" value="0"></div>
+                </div>
+                <button id="ikarus_separate_slot_reset" class="menu_button" type="button">Reset slot instruction</button>
+                <div class="ikarus-hint" style="margin-top:2px;color:#80e0ff;">The first AI places lightweight slots. The second AI creates ordered prompts off-screen; Ikarus generates images and replaces only exact slots. Story text and HTML are never rewritten.</div>
             </div>
             <div class="ikarus-standalone-options" style="display:none;">
                 <label class="ikarus-toggle"><input type="checkbox" id="ikarus_standalone_auto"><span>Auto-generate after each new AI message</span></label>
