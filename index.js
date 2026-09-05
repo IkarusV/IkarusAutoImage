@@ -2404,7 +2404,13 @@ async function runStandaloneGeneration(request='',auto=false,targetIndex=null){
         const raw=await requestStandalonePrompts(request,auto,targetIndex); if(_standaloneCancelled) return;
         let matches=getImagePromptMatches(normalizePicPrompts(raw||''),s().promptInjection.regex);
         if(!matches.length) throw new Error('The assistant returned no [pic prompt] entries.');
-        appendStandaloneChat('assistant', `Prepared ${matches.length} image prompt${matches.length===1?'':'s'}. Generation has started.`);
+        // Hard runtime limit: never generate more than the current Standalone setting,
+        // regardless of how many prompts the planner returns.
+        const imageLimit = Math.max(1, Math.min(30, Number(s().standalone.imageCount) || 1));
+        const returnedCount = matches.length;
+        matches = matches.slice(0, imageLimit);
+        if (returnedCount > imageLimit) console.log(`[${EXT}] Standalone: limited ${returnedCount} returned prompts to ${imageLimit}`);
+        appendStandaloneChat('assistant', `Prepared ${matches.length} image prompt${matches.length===1?'':'s'}${returnedCount > imageLimit ? ` (limited from ${returnedCount})` : ''}. Generation has started.`);
         $('#ikarus_standalone_progress').text(`Found ${matches.length} prompts. Generating 0 / ${matches.length}`);
         const lib=standaloneLibrary();
         for(let i=0;i<matches.length;i++){
