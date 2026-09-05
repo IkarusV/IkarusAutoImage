@@ -1830,7 +1830,11 @@ async function handleSeparateMode(targetIndex = null) {
             const sd = SlashCommandParser.commands?.['sd'];
             if (!sd?.callback) throw new Error('/sd image generation is unavailable');
             try {
-                const url = await sd.callback({ quiet: 'true' }, imgPrompt);
+                // Native /imagine expects image_swipes for command generations even in quiet mode.
+                // Build it before invoking the callback; the prompt remains off-screen.
+                if (!message.extra || typeof message.extra !== 'object') message.extra = {};
+                if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+                const url = await sd.callback({ quiet: 'true', gallery: 'false' }, imgPrompt);
                 if (typeof url === 'string' && url.trim()) generatedImages.push({ url: url.trim(), prompt: imgPrompt });
             } catch (imageError) {
                 console.error(`[${EXT}] Separate mode image generation failed:`, imageError);
@@ -1851,7 +1855,7 @@ async function handleSeparateMode(targetIndex = null) {
         const imageHtml = generatedImages.map(x => `<img src="${esc(x.url)}" alt="Generated image">`).join('\n');
         message.mes = `${targetMessage.replace(/\s+$/, '')}\n\n${imageHtml}`;
         if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = message.mes;
-        if (!message.extra) message.extra = {};
+        if (!message.extra || typeof message.extra !== 'object') message.extra = {};
         message.extra.ikarus_image_prompts = generatedImages.map(x => x.prompt);
         updateMessageBlock(mesIdx, message);
         await eventSource.emit(event_types.MESSAGE_UPDATED, mesIdx);
