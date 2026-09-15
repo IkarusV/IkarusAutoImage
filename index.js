@@ -58,6 +58,7 @@ const DEFAULT_SETTINGS = {
     // Double cleaner: strips duplicate tags after all processing
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
     loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
+    hideToasts: false,
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -75,6 +76,11 @@ const DEFAULT_SETTINGS = {
 
 // ==========================================================================
 // Helpers
+
+function ikarusNotify(type, ...args) {
+    if (s().hideToasts) return null;
+    return toastr[type]?.(...args);
+}
 // ==========================================================================
 let _nextId = Date.now();
 function uid() { return `ik_${_nextId++}_${Math.random().toString(36).slice(2, 8)}`; }
@@ -191,6 +197,7 @@ function ensureSettings() {
     if (es.invertProcessingOrder === undefined) es.invertProcessingOrder = false;
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
     if (es.loraCleaner === undefined) es.loraCleaner = true;
+    if (es.hideToasts === undefined) es.hideToasts = false;
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
@@ -232,6 +239,7 @@ function updateUI() {
         $('#ikarus_filter_imagine').prop('checked', es.filterImagine);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
         $('#ikarus_lora_cleaner').prop('checked', es.loraCleaner !== false);
+        $('#ikarus_hide_toasts').prop('checked', es.hideToasts === true);
         $('#ikarus_dc_tags').val(es.doubleCleaner?.tags || '');
         $('#ikarus_dc_tags_row').toggle(es.doubleCleaner?.mode === 'listed');
         $('#ikarus_generation_mode').val(es.generationMode || 'together');
@@ -2269,7 +2277,7 @@ function createStandaloneWindow() {
       <footer><textarea id="ikarus_standalone_request" rows="2" placeholder="Describe an image, or ask for a chronological image sequence..."></textarea><button id="ikarus_standalone_send">Generate</button><button id="ikarus_standalone_stop" disabled>Stop</button></footer>
       <div class="ikarus-resize-grip" title="Drag to resize"></div>
     </section>
-    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header · drag corner</span><button class="ikarus-viewer-meta-toggle">Hide details</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
+    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header · drag corner</span><div class="ikarus-slideshow-controls"><label>Seconds <input class="ikarus-slideshow-seconds" type="number" min="1" max="3600" value="5"></label><button class="ikarus-slideshow-toggle">Play slideshow</button></div><button class="ikarus-viewer-meta-toggle">Hide details</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
     const win=$('#ikarus_standalone_window'), bubble=$('#ikarus_standalone_bubble');
     syncStandaloneBubbleVisibility();
     function switchTab(tab){ $('.ikarus-standalone-tabs button').removeClass('active').filter(`[data-tab="${tab}"]`).addClass('active'); $('.ikarus-standalone-tab').removeClass('active'); $(`#ikarus_standalone_${tab}_tab`).addClass('active'); }
@@ -2329,6 +2337,7 @@ function createStandaloneWindow() {
     $('#ikarus_image_viewer').on('pointerup pointercancel', '.ikarus-viewer-resize', () => viewerResize = null);
     $('#ikarus_image_viewer .ikarus-viewer-prev').on('click', () => stepStandaloneViewer(-1));
     $('#ikarus_image_viewer .ikarus-viewer-next').on('click', () => stepStandaloneViewer(1));
+    $('#ikarus_image_viewer .ikarus-slideshow-toggle').on('click', toggleStandaloneSlideshow);
     $('#ikarus_image_viewer').on('click','.ikarus-viewer-copy',async()=>{const text=$('#ikarus_image_viewer textarea').val();try{await navigator.clipboard.writeText(text);toastr.success('Prompt copied');}catch{toastr.warning('Could not copy prompt');}});
     $('#ikarus_image_viewer').on('click','.ikarus-viewer-open',()=>{const src=$('#ikarus_image_viewer img').attr('src');if(src)window.open(src,'_blank','noopener');});
     $(document).on('keydown.ikarusViewer',e=>{if($('#ikarus_image_viewer').hasClass('closed'))return;if(e.key==='Escape')closeStandaloneViewer();if(e.key==='ArrowLeft')stepStandaloneViewer(-1);if(e.key==='ArrowRight')stepStandaloneViewer(1);});
@@ -2346,12 +2355,14 @@ function renderStandaloneChat(){
     const el=$('#ikarus_standalone_chatlog')[0];if(el)el.scrollTop=el.scrollHeight;
 }
 let _standaloneViewerIndex=0;
+let _standaloneSlideshowTimer=null;
 function renderStandaloneGallery() {
     if (!$('#ikarus_standalone_window').length) return;
     const st=s().standalone, lib=standaloneLibrary();
     $('#ikarus_gallery_badge').text(lib.images.length); renderStandaloneChat();
     $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); $('#ikarus_window_include_card').prop('checked',!!st.includeCharacterCard); $('#ikarus_window_include_first').prop('checked',!!st.includeFirstMessage); $('#ikarus_window_include_extensions').prop('checked',!!st.includeExtensionPrompts); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
-    $('#ikarus_standalone_gallery').html(lib.images.length ? lib.images.map((x,i)=>`<figure data-i="${i}"><button class="ikarus-gallery-image" data-i="${i}" title="Open image viewer"><img src="${esc(x.url)}" loading="lazy"></button><figcaption><span>Image ${i+1}</span><span class="ikarus-gallery-actions"><button class="ikarus-gallery-detach" data-i="${i}" title="Open detached viewer">&#8599;</button><button class="ikarus-gallery-info" data-i="${i}" title="View prompt and metadata">&#9998;</button><button class="ikarus-gallery-delete" data-i="${i}" title="Delete image">&times;</button></span></figcaption></figure>`).join('') : '<div class="ikarus-gallery-empty">This chat has no standalone images yet.</div>');
+    const newestFirst=lib.images.map((x,i)=>({x,i})).reverse();
+    $('#ikarus_standalone_gallery').html(lib.images.length ? newestFirst.map(({x,i})=>`<figure data-i="${i}"><button class="ikarus-gallery-image" data-i="${i}" title="Open image viewer"><img src="${esc(x.url)}" loading="lazy"></button><figcaption><span>Image ${i+1}</span><span class="ikarus-gallery-actions"><button class="ikarus-gallery-detach" data-i="${i}" title="Open detached viewer">&#8599;</button><button class="ikarus-gallery-info" data-i="${i}" title="View prompt and metadata">&#9998;</button><button class="ikarus-gallery-delete" data-i="${i}" title="Delete image">&times;</button></span></figcaption></figure>`).join('') : '<div class="ikarus-gallery-empty">This chat has no standalone images yet.</div>');
     $('#ikarus_standalone_gallery .ikarus-gallery-image').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
     $('#ikarus_standalone_gallery .ikarus-gallery-detach').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
     $('#ikarus_standalone_gallery .ikarus-gallery-info').on('click',function(){openStandaloneViewer(Number($(this).data('i')),true);});
@@ -2359,10 +2370,12 @@ function renderStandaloneGallery() {
 }
 function openStandaloneViewer(index,focusMetadata=false){
     const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=Math.max(0,Math.min(index,images.length-1));
-    const item=images[_standaloneViewerIndex],viewer=$('#ikarus_image_viewer');viewer.find('img').attr('src',item.url);viewer.find('textarea').val(item.prompt||'Prompt not stored for this older gallery item.');viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex+1} of ${images.length}</b><span>Created: ${esc(item.createdAt?new Date(item.createdAt).toLocaleString():'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);viewer.removeClass('closed');viewer.find('.ikarus-viewer-prev').prop('disabled',images.length<2);viewer.find('.ikarus-viewer-next').prop('disabled',images.length<2);if(focusMetadata)setTimeout(()=>viewer.find('textarea').trigger('focus').trigger('select'),0);
+    const item=images[_standaloneViewerIndex],viewer=$('#ikarus_image_viewer');viewer.find('img').attr('src',item.url);viewer.find('textarea').val(item.prompt||'Prompt not stored for this older gallery item.');viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex+1} of ${images.length}</b><span>Created: ${esc(item.createdAt?new Date(item.createdAt).toLocaleString():'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);viewer.removeClass('closed');viewer.find('.ikarus-viewer-prev').prop('disabled',_standaloneViewerIndex<=0);viewer.find('.ikarus-viewer-next').prop('disabled',_standaloneViewerIndex>=images.length-1);if(focusMetadata)setTimeout(()=>viewer.find('textarea').trigger('focus').trigger('select'),0);
 }
-function closeStandaloneViewer(){$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
-function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=(_standaloneViewerIndex+delta+images.length)%images.length;openStandaloneViewer(_standaloneViewerIndex);}
+function stopStandaloneSlideshow(){if(_standaloneSlideshowTimer){clearInterval(_standaloneSlideshowTimer);_standaloneSlideshowTimer=null;}$('#ikarus_image_viewer .ikarus-slideshow-toggle').text('Play slideshow');}
+function closeStandaloneViewer(){stopStandaloneSlideshow();$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
+function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[];if(!images.length)return false;const next=_standaloneViewerIndex+delta;if(next<0||next>=images.length){if(delta>0)stopStandaloneSlideshow();openStandaloneViewer(_standaloneViewerIndex);return false;}openStandaloneViewer(next);return true;}
+function toggleStandaloneSlideshow(){if(_standaloneSlideshowTimer){stopStandaloneSlideshow();return;}const images=standaloneLibrary().images||[];if(!images.length)return;if(_standaloneViewerIndex>=images.length-1)openStandaloneViewer(0);const seconds=Math.max(1,Math.min(3600,Number($('#ikarus_image_viewer .ikarus-slideshow-seconds').val())||5));$('#ikarus_image_viewer .ikarus-slideshow-seconds').val(seconds);$('#ikarus_image_viewer .ikarus-slideshow-toggle').text('Stop slideshow');_standaloneSlideshowTimer=setInterval(()=>stepStandaloneViewer(1),seconds*1000);}
 function standaloneContextText(targetIndex = null) {
     const ctx = getContext();
     const st = s().standalone;
@@ -2458,6 +2471,17 @@ function updatePromptTester() {
     $('#ikarus_test_negative_output').val(result.negative);
 }
 
+async function generatePromptTesterImage() {
+    updatePromptTester();
+    const prompt=$('#ikarus_test_prompt_output').val()?.trim()||'';
+    if(!prompt){ikarusNotify('warning','Enter a test prompt first');return;}
+    const button=$('#ikarus_test_generate_image').prop('disabled',true).text('Generating...');
+    try{const sd=SlashCommandParser.commands?.['sd'];if(!sd?.callback)throw new Error('/sd image generation is unavailable');markProcessedSdPrompt(prompt);const url=await sd.callback({quiet:'true',gallery:'false'},prompt);if(typeof url!=='string'||!url.trim())throw new Error('No image URL was returned');$('#ikarus_test_image_result').empty().append($('<img>',{src:url.trim(),alt:'Prompt tester result'}));}
+    catch(error){ikarusNotify('error',`Test image: ${error.message||error}`);}
+    finally{button.prop('disabled',false).text('Generate test image');}
+}
+
+
 function openStandaloneGalleryCentered() {
     createStandaloneWindow();
     const win = $('#ikarus_standalone_window');
@@ -2540,6 +2564,7 @@ async function createSettings(html) {
     $('#ikarus_standalone_open_gallery').on('click', openStandaloneGalleryCentered);
     $('#ikarus_test_prompt_input, #ikarus_test_negative_input').on('input', updatePromptTester);
     $('#ikarus_test_prompt_run').on('click', updatePromptTester);
+    $('#ikarus_test_generate_image').on('click', generatePromptTesterImage);
     $('#ikarus_manual_rescan').on('click', handleManualRescan);
 
     // Section 2: Presets
@@ -2618,6 +2643,7 @@ async function createSettings(html) {
     $('#ikarus_auto_fix_pic').on('change', function () { s().autoFixPicFormat = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_filter_native_sd').on('change', function () { s().filterNativeSd = $(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_filter_imagine').on('change', function () { s().filterImagine = $(this).prop('checked'); ensureImagineCommandWrapped(); saveSettingsDebounced(); });
+    $('#ikarus_hide_toasts').on('change', function () { s().hideToasts=$(this).prop('checked'); saveSettingsDebounced(); });
     $('#ikarus_lora_cleaner').on('change', function () { s().loraCleaner = $(this).prop('checked'); saveSettingsDebounced(); updatePromptTester(); });
     $('#ikarus_dc_mode').on('change', function () {
         s().doubleCleaner.mode = $(this).val(); saveSettingsDebounced();
