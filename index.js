@@ -2277,7 +2277,7 @@ function createStandaloneWindow() {
       <footer><textarea id="ikarus_standalone_request" rows="2" placeholder="Describe an image, or ask for a chronological image sequence..."></textarea><button id="ikarus_standalone_send">Generate</button><button id="ikarus_standalone_stop" disabled>Stop</button></footer>
       <div class="ikarus-resize-grip" title="Drag to resize"></div>
     </section>
-    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header ? drag corner</span><button class="ikarus-viewer-meta-toggle" title="Hide details">?</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-slideshow" aria-label="Play slideshow" title="Play slideshow">&#9654;</button><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
+    <div id="ikarus_image_viewer" class="closed"><header id="ikarus_viewer_header"><b>Detached Image Viewer</b><span>Drag header, or drag image when details are hidden</span><button class="ikarus-viewer-meta-toggle" title="Hide details" aria-label="Hide details">&#9660;</button><button class="ikarus-viewer-close">&times;</button></header><div class="ikarus-viewer-stage"><button class="ikarus-viewer-prev">&#8249;</button><img alt="Generated image"><button class="ikarus-viewer-slideshow" aria-label="Play slideshow" title="Play slideshow">&#9654;</button><button class="ikarus-viewer-next">&#8250;</button></div><aside><div class="ikarus-viewer-actions"><button class="ikarus-viewer-copy">Copy prompt</button><button class="ikarus-viewer-open">Open original</button></div><label>Prompt used</label><textarea readonly></textarea><div class="ikarus-viewer-meta"></div></aside><div class="ikarus-viewer-resize" title="Drag to resize"></div></div>`);
     const win=$('#ikarus_standalone_window'), bubble=$('#ikarus_standalone_bubble');
     syncStandaloneBubbleVisibility();
     function switchTab(tab){ $('.ikarus-standalone-tabs button').removeClass('active').filter(`[data-tab="${tab}"]`).addClass('active'); $('.ikarus-standalone-tab').removeClass('active'); $(`#ikarus_standalone_${tab}_tab`).addClass('active'); }
@@ -2309,22 +2309,28 @@ function createStandaloneWindow() {
     $('#ikarus_image_viewer .ikarus-viewer-meta-toggle').on('click', function () {
         const viewer = $('#ikarus_image_viewer');
         viewer.toggleClass('details-hidden');
-        $(this).text(viewer.hasClass('details-hidden') ? '?' : '?').attr('title',viewer.hasClass('details-hidden') ? 'Show details' : 'Hide details');
+        const hidden=viewer.hasClass('details-hidden');$(this).html(hidden?'&#9650;':'&#9660;').attr({'title':hidden?'Show details':'Hide details','aria-label':hidden?'Show details':'Hide details'});
     });
     let viewerDrag = null;
     let viewerResize = null;
-    $('#ikarus_image_viewer').on('pointerdown', '#ikarus_viewer_header', function (e) {
-        if ($(e.target).is('button')) return;
-        const r = $('#ikarus_image_viewer')[0].getBoundingClientRect();
+    $('#ikarus_image_viewer').on('pointerdown', '#ikarus_viewer_header, .ikarus-viewer-stage', function (e) {
+        const viewer = $('#ikarus_image_viewer');
+        const fromStage = $(this).hasClass('ikarus-viewer-stage');
+        if ($(e.target).is('button') || (fromStage && !viewer.hasClass('details-hidden'))) return;
+        const r = viewer[0].getBoundingClientRect();
         viewerDrag = { x: e.clientX - r.left, y: e.clientY - r.top };
         this.setPointerCapture(e.pointerId);
+        viewer.addClass('ikarus-viewer-dragging');
         e.preventDefault();
     });
-    $('#ikarus_image_viewer').on('pointermove', '#ikarus_viewer_header', function (e) {
+    $('#ikarus_image_viewer').on('pointermove', '#ikarus_viewer_header, .ikarus-viewer-stage', function (e) {
         if (!viewerDrag) return;
-        $('#ikarus_image_viewer').css({ left: Math.max(0, e.clientX - viewerDrag.x), top: Math.max(0, e.clientY - viewerDrag.y), right: 'auto', bottom: 'auto' });
+        const viewer = $('#ikarus_image_viewer');
+        const maxX = Math.max(0, innerWidth - viewer.outerWidth());
+        const maxY = Math.max(0, innerHeight - viewer.outerHeight());
+        viewer.css({ left: Math.min(maxX, Math.max(0, e.clientX - viewerDrag.x)), top: Math.min(maxY, Math.max(0, e.clientY - viewerDrag.y)), right: 'auto', bottom: 'auto' });
     });
-    $('#ikarus_image_viewer').on('pointerup pointercancel', '#ikarus_viewer_header', () => viewerDrag = null);
+    $('#ikarus_image_viewer').on('pointerup pointercancel', '#ikarus_viewer_header, .ikarus-viewer-stage', function () { viewerDrag = null; $('#ikarus_image_viewer').removeClass('ikarus-viewer-dragging'); });
     $('#ikarus_image_viewer').on('pointerdown', '.ikarus-viewer-resize', function (e) {
         const r = $('#ikarus_image_viewer')[0].getBoundingClientRect();
         viewerResize = { x: e.clientX, y: e.clientY, w: r.width, h: r.height };

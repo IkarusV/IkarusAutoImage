@@ -695,3 +695,11 @@
 #ikarus_image_viewer .ikarus-viewer-stage:hover .ikarus-viewer-prev,#ikarus_image_viewer .ikarus-viewer-stage:hover .ikarus-viewer-next{opacity:.72}
 .ikarus-window-slideshow-label{display:flex!important;align-items:center;gap:5px!important;white-space:nowrap}.ikarus-window-slideshow-label input{width:56px!important}
 @media(max-width:600px){.ikarus-window-slideshow-label{font-size:10px!important}.ikarus-window-slideshow-label input{width:46px!important}#ikarus_image_viewer .ikarus-viewer-slideshow{width:46px;height:46px}}
+
+/* Hidden-detail viewer remains draggable from the image; all overlays fade when idle. */
+#ikarus_image_viewer.details-hidden .ikarus-viewer-stage{cursor:grab;touch-action:none}
+#ikarus_image_viewer.ikarus-viewer-dragging .ikarus-viewer-stage{cursor:grabbing}
+#ikarus_image_viewer .ikarus-viewer-meta-toggle{opacity:0;transition:opacity .18s;background:rgba(0,0,0,.72)!important;border:1px solid rgba(255,255,255,.3)!important;color:#fff!important;border-radius:7px;font-size:17px;line-height:1;width:40px;height:34px;padding:0!important}
+#ikarus_image_viewer:hover .ikarus-viewer-meta-toggle,#ikarus_image_viewer .ikarus-viewer-meta-toggle:focus{opacity:.78}
+#ikarus_image_viewer.details-hidden .ikarus-viewer-meta-toggle{opacity:0!important;background:rgba(0,0,0,.72)!important;border:1px solid rgba(255,255,255,.3)!important;border-top:1px solid rgba(255,255,255,.3)!important;border-radius:7px!important}
+#ikarus_image_viewer.details-hidden:hover .ikarus-viewer-meta-toggle,#ikarus_image_viewer.details-hidden .ikarus-viewer-meta-toggle:focus{opacity:.78!important}
