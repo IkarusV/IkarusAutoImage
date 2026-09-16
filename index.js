@@ -2367,22 +2367,71 @@ function renderStandaloneGallery() {
     if (!$('#ikarus_standalone_window').length) return;
     const st=s().standalone, lib=standaloneLibrary();
     $('#ikarus_gallery_badge').text(lib.images.length); renderStandaloneChat();
-    $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); $('#ikarus_window_include_card').prop('checked',!!st.includeCharacterCard); $('#ikarus_window_include_first').prop('checked',!!st.includeFirstMessage); $('#ikarus_window_include_extensions').prop('checked',!!st.includeExtensionPrompts); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
+    $('#ikarus_window_auto').prop('checked',!!st.auto); $('#ikarus_window_context').val(st.contextSize); $('#ikarus_window_count').val(st.imageCount); $('#ikarus_window_slideshow_seconds').val(Math.max(1, Math.min(3600, Number(st.slideshowSeconds) || 5))); $('#ikarus_window_include_card').prop('checked',!!st.includeCharacterCard); $('#ikarus_window_include_first').prop('checked',!!st.includeFirstMessage); $('#ikarus_window_include_extensions').prop('checked',!!st.includeExtensionPrompts); const wp=$('#ikarus_window_profile'); if(wp.length){wp.html($('#ikarus_separate_profile').html()||'<option value="">Same as Current</option>');wp.val(st.profile||'');} $('#ikarus_standalone_hide_bubble').prop('checked', !!st.hideBubble); syncStandaloneBubbleVisibility();
     const newestFirst=lib.images.map((x,i)=>({x,i})).reverse();
     $('#ikarus_standalone_gallery').html(lib.images.length ? newestFirst.map(({x,i})=>`<figure data-i="${i}"><button class="ikarus-gallery-image" data-i="${i}" title="Open image viewer"><img src="${esc(x.url)}" loading="lazy"></button><figcaption><span>Image ${i+1}</span><span class="ikarus-gallery-actions"><button class="ikarus-gallery-detach" data-i="${i}" title="Open detached viewer">&#8599;</button><button class="ikarus-gallery-info" data-i="${i}" title="View prompt and metadata">&#9998;</button><button class="ikarus-gallery-delete" data-i="${i}" title="Delete image">&times;</button></span></figcaption></figure>`).join('') : '<div class="ikarus-gallery-empty">This chat has no standalone images yet.</div>');
     $('#ikarus_standalone_gallery .ikarus-gallery-image').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
     $('#ikarus_standalone_gallery .ikarus-gallery-detach').on('click',function(){openStandaloneViewer(Number($(this).data('i')));});
     $('#ikarus_standalone_gallery .ikarus-gallery-info').on('click',function(){openStandaloneViewer(Number($(this).data('i')),true);});
     $('#ikarus_standalone_gallery .ikarus-gallery-delete').on('click',function(){const i=Number($(this).data('i'));if(confirm(`Delete Image ${i+1}?`)){lib.images.splice(i,1);saveSettingsDebounced();renderStandaloneGallery();}});
+    refreshStandaloneViewerState();
+}
+function refreshStandaloneViewerState() {
+    const viewer = $('#ikarus_image_viewer');
+    if (!viewer.length || viewer.hasClass('closed')) return;
+    const images = standaloneLibrary().images || [];
+    if (!images.length) { closeStandaloneViewer(); return; }
+    _standaloneViewerIndex = Math.max(0, Math.min(_standaloneViewerIndex, images.length - 1));
+    const item = images[_standaloneViewerIndex];
+    viewer.find('img').attr('src', item.url);
+    viewer.find('textarea').val(item.prompt || 'Prompt not stored for this older gallery item.');
+    viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex + 1} of ${images.length}</b><span>Created: ${esc(item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);
+    viewer.find('.ikarus-viewer-prev').prop('disabled', _standaloneViewerIndex <= 0);
+    viewer.find('.ikarus-viewer-next').prop('disabled', _standaloneViewerIndex >= images.length - 1);
 }
 function openStandaloneViewer(index,focusMetadata=false){
-    const images=standaloneLibrary().images||[];if(!images.length)return;_standaloneViewerIndex=Math.max(0,Math.min(index,images.length-1));
-    const item=images[_standaloneViewerIndex],viewer=$('#ikarus_image_viewer');viewer.find('img').attr('src',item.url);viewer.find('textarea').val(item.prompt||'Prompt not stored for this older gallery item.');viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex+1} of ${images.length}</b><span>Created: ${esc(item.createdAt?new Date(item.createdAt).toLocaleString():'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);viewer.removeClass('closed');viewer.find('.ikarus-viewer-prev').prop('disabled',_standaloneViewerIndex<=0);viewer.find('.ikarus-viewer-next').prop('disabled',_standaloneViewerIndex>=images.length-1);if(focusMetadata)setTimeout(()=>viewer.find('textarea').trigger('focus').trigger('select'),0);
+    const images=standaloneLibrary().images||[];if(!images.length)return;
+    _standaloneViewerIndex=Math.max(0,Math.min(index,images.length-1));
+    const viewer=$('#ikarus_image_viewer');viewer.removeClass('closed');refreshStandaloneViewerState();
+    if(focusMetadata)setTimeout(()=>viewer.find('textarea').trigger('focus').trigger('select'),0);
 }
-function stopStandaloneSlideshow(){if(_standaloneSlideshowTimer){clearInterval(_standaloneSlideshowTimer);_standaloneSlideshowTimer=null;}$('#ikarus_image_viewer .ikarus-viewer-slideshow').removeClass('playing').html('&#9654;').attr('title','Play slideshow');}
+function stopStandaloneSlideshow(){
+    if(_standaloneSlideshowTimer){clearTimeout(_standaloneSlideshowTimer);_standaloneSlideshowTimer=null;}
+    $('#ikarus_image_viewer .ikarus-viewer-slideshow').removeClass('playing waiting').html('&#9654;').attr('title','Play slideshow');
+}
 function closeStandaloneViewer(){stopStandaloneSlideshow();$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
-function stepStandaloneViewer(delta){const images=standaloneLibrary().images||[];if(!images.length)return false;const next=_standaloneViewerIndex+delta;if(next<0||next>=images.length){if(delta>0)stopStandaloneSlideshow();openStandaloneViewer(_standaloneViewerIndex);return false;}openStandaloneViewer(next);return true;}
-function toggleStandaloneSlideshow(){if(_standaloneSlideshowTimer){stopStandaloneSlideshow();return;}const images=standaloneLibrary().images||[];if(!images.length)return;if(_standaloneViewerIndex>=images.length-1)openStandaloneViewer(0);const seconds=Math.max(1,Math.min(3600,Number(s().standalone.slideshowSeconds)||5));$('#ikarus_image_viewer .ikarus-viewer-slideshow').addClass('playing').html('&#9632;').attr('title','Stop slideshow');_standaloneSlideshowTimer=setInterval(()=>stepStandaloneViewer(1),seconds*1000);}
+function stepStandaloneViewer(delta){
+    const images=standaloneLibrary().images||[];if(!images.length)return false;
+    const next=_standaloneViewerIndex+delta;
+    if(next<0||next>=images.length){refreshStandaloneViewerState();return false;}
+    openStandaloneViewer(next);return true;
+}
+function scheduleStandaloneSlideshow(waitForNew=false){
+    if(!_standaloneSlideshowTimer && !$('#ikarus_image_viewer .ikarus-viewer-slideshow').hasClass('playing')) return;
+    const images=standaloneLibrary().images||[];
+    const hasNext=_standaloneViewerIndex < images.length-1;
+    if(!hasNext){
+        $('#ikarus_image_viewer .ikarus-viewer-slideshow').addClass('waiting').attr('title','Slideshow waiting for a new image');
+        _standaloneSlideshowTimer=setTimeout(()=>{_standaloneSlideshowTimer=null;scheduleStandaloneSlideshow(true);},1000);
+        return;
+    }
+    $('#ikarus_image_viewer .ikarus-viewer-slideshow').removeClass('waiting').attr('title','Stop slideshow');
+    const seconds=Math.max(1,Math.min(3600,Number(s().standalone.slideshowSeconds)||5));
+    // A newly detected image gets the full configured viewing delay before advancing.
+    _standaloneSlideshowTimer=setTimeout(()=>{
+        _standaloneSlideshowTimer=null;
+        if(stepStandaloneViewer(1)) scheduleStandaloneSlideshow(false);
+        else scheduleStandaloneSlideshow(true);
+    },seconds*1000);
+}
+function toggleStandaloneSlideshow(){
+    const button=$('#ikarus_image_viewer .ikarus-viewer-slideshow');
+    if(button.hasClass('playing')){stopStandaloneSlideshow();return;}
+    if(!(standaloneLibrary().images||[]).length)return;
+    // Always continue forward from the image where Play was pressed.
+    button.addClass('playing').html('&#9632;').attr('title','Stop slideshow');
+    scheduleStandaloneSlideshow(false);
+}
 function standaloneContextText(targetIndex = null) {
     const ctx = getContext();
     const st = s().standalone;
