@@ -23,6 +23,7 @@ A **SillyTavern extension** for automatic AI image generation during roleplay. D
   <img width="1743" height="1157" alt="image" src="https://github.com/user-attachments/assets/9bb5e7d0-aff8-4890-b41c-65ef6f3bd03c" />
 
 - **Double Cleaner** - Removes duplicate tags after processing
+- **AI Edit** - Ask an AI connection profile to edit, create, or delete your character replacements, with a preview before anything is applied
 - **Stable Character Data** - Uses avatar filenames as keys, not numeric IDs, so data survives reordering
 
 ## Installation
@@ -59,6 +60,19 @@ Add per-character style instructions, danbooru tag lists, or generation rules th
 ### Global Manager
 Click **Manage** to open the folder/category organizer for your global replacements. Create categories (e.g., "Cartoon", "Video Games") and folders (e.g., "Winx Club", "Nier Automata") to keep things tidy.
 
+### AI Edit
+Click **AI** next to **Manage / Library** to have one of your connection profiles edit the current character's replacements.
+
+- **Scope:** only enabled replacements of the current card are sent to the AI. Disabled entries, global rules, and other cards are never visible or modified.
+- **Field modes:** Tags only, Caption only, Krea 2 only, or all three at once. In a single-field mode, any other field returned by the AI is discarded.
+- **Ultimate control** (on by default): allows the AI to edit trigger groups (`OR`, `AND`, `XOR`, `NOR`, `CHILD`), replace mode, short tag, priority, names, and parent/child links. A child is created by setting `"parent": "Erza"` on a rule; order in the JSON does not matter. Disable it for plain text edits.
+- **Create / delete flags:** creations and deletions are ignored unless allowed in the request, e.g. `--create Erza` (also allows new children of Erza), `--create *`, `--remove Juvia`.
+- **Preview:** every change is shown as old/new before **Apply**. Invalid or disallowed operations are listed as ignored, and invalid JSON applies nothing.
+
+Example request:
+```
+Create Erza's 5 main armor sets as child replacements of Erza. Each should replace "armor" when her matching weapon is in the prompt. --create Erza
+```
 ### Standalone mode
 Added a standalone mode that spawn a pop up window that can be opened and closed to auto generate image or even ask your ai to generate more and save by chat ! but also saved in your galery in case.
 <img width="2034" height="1061" alt="image" src="https://github.com/user-attachments/assets/962a38af-19e1-4040-9fe5-76d0f637d8ce" />
