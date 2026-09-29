@@ -63,6 +63,9 @@ Click **Manage** to open the folder/category organizer for your global replaceme
 ### AI Edit
 Click **AI** next to **Manage / Library** to have one of your connection profiles edit the current character's replacements.
 
+<img width="915" height="1065" alt="image" src="https://github.com/user-attachments/assets/415a8f06-fbc1-4dfd-afac-2ff16d51cfea" />
+
+
 - **Scope:** only enabled replacements of the current card are sent to the AI. Disabled entries, global rules, and other cards are never visible or modified.
 - **Field modes:** Tags only, Caption only, Krea 2 only, or all three at once. In a single-field mode, any other field returned by the AI is discarded.
 - **Ultimate control** (on by default): allows the AI to edit trigger groups (`OR`, `AND`, `XOR`, `NOR`, `CHILD`), replace mode, short tag, priority, names, and parent/child links. A child is created by setting `"parent": "Erza"` on a rule; order in the JSON does not matter. Disable it for plain text edits.
