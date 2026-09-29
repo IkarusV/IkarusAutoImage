@@ -703,3 +703,14 @@
 #ikarus_image_viewer:hover .ikarus-viewer-meta-toggle,#ikarus_image_viewer .ikarus-viewer-meta-toggle:focus{opacity:.78}
 #ikarus_image_viewer.details-hidden .ikarus-viewer-meta-toggle{opacity:0!important;background:rgba(0,0,0,.72)!important;border:1px solid rgba(255,255,255,.3)!important;border-top:1px solid rgba(255,255,255,.3)!important;border-radius:7px!important}
 #ikarus_image_viewer.details-hidden:hover .ikarus-viewer-meta-toggle,#ikarus_image_viewer.details-hidden .ikarus-viewer-meta-toggle:focus{opacity:.78!important}
+
+/* AI character replacement editor */
+.ikarus-ai-editor-popup{max-width:820px}
+.ikarus-ai-editor-body{padding:12px 14px;overflow:auto;display:flex;flex-direction:column;gap:8px}
+.ikarus-ai-editor-row{display:flex;gap:10px;flex-wrap:wrap}.ikarus-ai-editor-row label{display:flex;flex-direction:column;gap:3px;flex:1;min-width:180px}
+.ikarus-ai-editor-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}#ikarus_ai_editor_status{opacity:.8;font-size:12px}
+.ikarus-ai-op{border:1px solid #ffffff22;border-radius:6px;padding:7px 9px;margin-bottom:6px;background:#00000040}
+.ikarus-ai-op-create{border-color:#4caf5088}.ikarus-ai-op-remove{border-color:#f4433688}
+.ikarus-ai-field{display:grid;grid-template-columns:70px 1fr;gap:2px 8px;margin-top:4px;font-size:12px}.ikarus-ai-field span{grid-row:span 2;opacity:.7}
+.ikarus-ai-field del{color:#e57373;opacity:.8}.ikarus-ai-field ins{color:#81c784;text-decoration:none}
+.ikarus-ai-ignored{margin-top:6px;font-size:12px;opacity:.75}.ikarus-ai-ignored div{margin-left:8px}

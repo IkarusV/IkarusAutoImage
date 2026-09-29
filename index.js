@@ -59,6 +59,7 @@ const DEFAULT_SETTINGS = {
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
     loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
     hideToasts: false,
+    aiEditor: { profile: '', mode: 'all', webSearch: false }, // AI character replacement editor
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -198,6 +199,8 @@ function ensureSettings() {
     if (!es.doubleCleaner) es.doubleCleaner = { ...DEFAULT_SETTINGS.doubleCleaner };
     if (es.loraCleaner === undefined) es.loraCleaner = true;
     if (es.hideToasts === undefined) es.hideToasts = false;
+    if (!es.aiEditor || typeof es.aiEditor !== 'object') es.aiEditor = { ...DEFAULT_SETTINGS.aiEditor };
+    for (const [k, v] of Object.entries(DEFAULT_SETTINGS.aiEditor)) if (es.aiEditor[k] === undefined) es.aiEditor[k] = v;
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
@@ -2565,6 +2568,285 @@ async function generateFromSelectedMessage(messageId) {
 // ==========================================================================
 // UI Setup
 // ==========================================================================
+// ==========================================================================
+// AI Character Replacement Editor (character scope only)
+// ==========================================================================
+// Only enabled parent replacements of the current character are shown to the AI.
+// Removals and creations require explicit --remove / --create flags in the user request.
+function aiEditorCharacterRules() {
+    const cid = getCurrentCharId();
+    if (!cid) return [];
+    return (s().replacements || []).filter(r => r.scope === 'char' && r.charId === cid && !r.parentId && r.enabled);
+}
+
+function parseAiEditorFlags(text) {
+    const out = { remove: new Set(), create: new Set(), createAll: false };
+    const regex = /--(remove|create)\s+([^\n]*?)(?=\s--(?:remove|create)\b|\n|$)/gi;
+    for (const m of String(text || '').matchAll(regex)) {
+        const kind = m[1].toLowerCase();
+        for (let name of m[2].split(',')) {
+            name = name.trim().replace(/^[("'\[]+|[)"'\]]+$/g, '').trim().toLowerCase();
+            if (!name) continue;
+            if (kind === 'create' && (name === '*' || name === 'all')) out.createAll = true;
+            else out[kind].add(name);
+        }
+    }
+    return out;
+}
+
+function stripAiEditorFlags(text) {
+    return String(text || '').replace(/--(remove|create)\s+[^\n]*/gi, '').trim();
+}
+
+function parseAiEditorJson(raw) {
+    const text = String(raw || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+    const candidates = [text];
+    const obj = text.match(/\{[\s\S]*\}/);
+    if (obj) candidates.push(obj[0]);
+    const arr = text.match(/\[[\s\S]*\]/);
+    if (arr) candidates.push(arr[0]);
+    for (const c of candidates) {
+        try {
+            const v = JSON.parse(c);
+            if (Array.isArray(v)) return v;
+            if (Array.isArray(v?.operations)) return v.operations;
+        } catch { }
+    }
+    return null;
+}
+
+function aiEditorText(value) {
+    if (Array.isArray(value)) return value.map(x => String(x).trim()).filter(Boolean).join(', ');
+    return typeof value === 'string' ? value.trim() : '';
+}
+
+// Converts raw AI output into a safe, validated plan. Pure function for testability.
+function buildAiEditorPlan(raw, mode, flags, rules) {
+    const ops = parseAiEditorJson(raw);
+    if (!ops) return { plan: [], ignored: ['The AI response was not valid JSON.'] };
+    const byId = new Map(rules.map(r => [r.id, r]));
+    const byName = new Map(rules.map(r => [String(r.name || '').trim().toLowerCase(), r]));
+    const plan = [], ignored = [], touched = new Set();
+
+    const pickFields = (op) => {
+        const fields = {};
+        const trigger = aiEditorText(op.triggers ?? op.trigger);
+        if (trigger) fields.trigger = trigger;
+        const krea2 = aiEditorText(op.krea2);
+        if (krea2) fields.krea2 = krea2;
+        if (mode !== 'krea2') {
+            const tags = aiEditorText(op.tags ?? op.replacement);
+            const caption = aiEditorText(op.caption);
+            if (tags) fields.replacement = tags;
+            if (caption) fields.caption = caption;
+        }
+        return fields;
+    };
+
+    for (const op of ops) {
+        const action = String(op?.action || 'update').toLowerCase();
+        const target = byId.get(op?.id) || byName.get(String(op?.name || '').trim().toLowerCase());
+        const label = String(op?.name || op?.id || '(unnamed)');
+
+        if (action === 'remove') {
+            if (!target) { ignored.push(`Remove "${label}": character not found`); continue; }
+            if (!flags.remove.has(String(target.name).trim().toLowerCase())) { ignored.push(`Remove "${target.name}": missing --remove ${target.name}`); continue; }
+            if (touched.has(target.id)) continue;
+            touched.add(target.id);
+            plan.push({ type: 'remove', target });
+            continue;
+        }
+
+        if (action === 'create' && !target) {
+            const name = String(op?.name || '').trim();
+            if (!name) { ignored.push('Create: missing name'); continue; }
+            if (!flags.createAll && !flags.create.has(name.toLowerCase())) { ignored.push(`Create "${name}": missing --create ${name}`); continue; }
+            const fields = pickFields(op);
+            if (!fields.krea2 && !fields.replacement && !fields.caption) { ignored.push(`Create "${name}": no replacement text`); continue; }
+            if (plan.some(x => x.type === 'create' && x.name.toLowerCase() === name.toLowerCase())) continue;
+            plan.push({ type: 'create', name, fields });
+            continue;
+        }
+
+        // update (also covers "create" for a character that already exists)
+        if (!target) { ignored.push(`Update "${label}": character not found (ignored)`); continue; }
+        if (touched.has(target.id)) continue;
+        const fields = pickFields(op);
+        if (!Object.keys(fields).length) { ignored.push(`Update "${target.name}": no allowed fields changed`); continue; }
+        touched.add(target.id);
+        plan.push({ type: 'update', target, fields });
+    }
+    return { plan, ignored };
+}
+
+function applyAiEditorPlan(plan, charId) {
+    const es = s();
+    let updated = 0, created = 0, removed = 0;
+    for (const item of plan) {
+        if (item.type === 'update') {
+            const r = es.replacements.find(x => x.id === item.target.id);
+            if (!r) continue;
+            const f = item.fields;
+            if (f.trigger) {
+                const groups = normalizeReplacementTriggerGroups(r);
+                if (groups.length) groups[0].trigger = f.trigger;
+                else groups.push({ trigger: f.trigger, matchMode: r.matchMode || 'OR' });
+                r.triggerGroups = groups;
+                r.trigger = f.trigger;
+            }
+            if (f.replacement) r.replacement = f.replacement;
+            if (f.caption) r.caption = f.caption;
+            if (f.krea2) r.krea2 = f.krea2;
+            updated++;
+        } else if (item.type === 'remove') {
+            const before = es.replacements.length;
+            es.replacements = es.replacements.filter(x => x.id !== item.target.id && x.parentId !== item.target.id);
+            if (es.replacements.length !== before) removed++;
+        } else if (item.type === 'create') {
+            const f = item.fields;
+            const trigger = f.trigger || item.name;
+            const text = f.krea2 || f.caption || f.replacement;
+            es.replacements.push({
+                id: uid(), name: item.name, scope: 'char', charId,
+                trigger, matchMode: 'OR', triggerGroups: [{ trigger, matchMode: 'OR' }],
+                replacement: f.replacement || text, caption: f.caption || text, krea2: f.krea2 || text,
+                shortTag: '', replaceMode: 'first', priority: 0, parentId: null, enabled: true, folder: '',
+            });
+            created++;
+        }
+    }
+    return { updated, created, removed };
+}
+
+async function aiEditorWebSearch(query) {
+    const command = SlashCommandParser.commands?.['websearch'];
+    if (!command?.callback) throw new Error('SillyTavern Web Search extension is not installed or enabled');
+    const result = await command.callback({}, query);
+    return String(result || '').slice(0, 12000);
+}
+
+function renderAiEditorPreview(plan, ignored) {
+    const rows = plan.map(item => {
+        if (item.type === 'remove') {
+            const kids = (s().replacements || []).filter(r => r.parentId === item.target.id).length;
+            return `<div class="ikarus-ai-op ikarus-ai-op-remove"><b>Remove</b> ${esc(item.target.name)}${kids ? ` (and ${kids} child rule${kids === 1 ? '' : 's'})` : ''}</div>`;
+        }
+        const labels = { trigger: 'Triggers', replacement: 'Tags', caption: 'Caption', krea2: 'Krea 2' };
+        const fields = Object.entries(item.fields).map(([k, v]) => {
+            const before = item.type === 'update' ? (k === 'trigger' ? item.target.trigger : item.target[k]) : '';
+            return `<div class="ikarus-ai-field"><span>${labels[k]}</span>${before ? `<del>${esc(before)}</del>` : ''}<ins>${esc(v)}</ins></div>`;
+        }).join('');
+        return `<div class="ikarus-ai-op ikarus-ai-op-${item.type}"><b>${item.type === 'create' ? 'Create' : 'Update'}</b> ${esc(item.type === 'create' ? item.name : item.target.name)}${fields}</div>`;
+    }).join('');
+    const skipped = ignored.length ? `<div class="ikarus-ai-ignored"><b>Ignored (${ignored.length})</b>${ignored.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : '';
+    $('#ikarus_ai_editor_preview').html((rows || '<div class="ikarus-hint">No applicable changes.</div>') + skipped);
+}
+
+function openAiReplacementEditor() {
+    if ($('#ikarus_ai_editor_overlay').length) return;
+    const charId = getCurrentCharId();
+    if (!charId) { toastr.warning('Open a character chat first. The AI editor only edits character replacements.'); return; }
+    const charName = getCurrentCharName();
+    const cfg = s().aiEditor;
+    const profiles = (() => { try { return getContext().extensionSettings?.connectionManager?.profiles || []; } catch { return []; } })();
+    const profileOptions = ['<option value="">Same as Current</option>'].concat(profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join('');
+    const overlay = $(`
+    <div id="ikarus_ai_editor_overlay" class="ikarus-manager-overlay">
+      <div class="ikarus-manager-popup ikarus-ai-editor-popup">
+        <div class="ikarus-manager-header"><span>AI Character Replacement Editor - ${esc(charName)}</span><button id="ikarus_ai_editor_close" class="menu_button">&#10005;</button></div>
+        <div class="ikarus-ai-editor-body">
+          <div class="ikarus-hint">Edits only this character's replacements. Global replacements, disabled replacements, and child rules are invisible to the AI and never changed. Unknown characters in the AI answer are ignored.</div>
+          <div class="ikarus-ai-editor-row">
+            <label>Profile <select id="ikarus_ai_editor_profile" class="text_pole">${profileOptions}</select></label>
+            <label>Mode <select id="ikarus_ai_editor_mode" class="text_pole"><option value="krea2">Krea 2 only</option><option value="all">Tags + Caption + Krea 2</option></select></label>
+          </div>
+          <label class="ikarus-toggle"><input type="checkbox" id="ikarus_ai_editor_websearch"><span>Add SillyTavern internet search (Unfinished/test feature)</span></label>
+          <textarea id="ikarus_ai_editor_request" class="text_pole" rows="5" placeholder="e.g. Update Erza and all my Fairy Tail characters for Krea 2 using the format 'Erza (from Fairy Tail)', and add more triggers."></textarea>
+          <div class="ikarus-hint">Safety flags, one per line or comma-separated: <code>--create Natsu, Gray</code> allows creating those characters (<code>--create *</code> allows any). <code>--remove Juvia</code> allows removing that character. Without a flag, creations and removals are ignored.</div>
+          <div class="ikarus-ai-editor-actions"><button id="ikarus_ai_editor_send" class="menu_button">Ask AI</button><button id="ikarus_ai_editor_apply" class="menu_button" disabled>Apply changes</button><span id="ikarus_ai_editor_status"></span></div>
+          <div id="ikarus_ai_editor_preview"></div>
+        </div>
+      </div>
+    </div>`);
+    $('body').append(overlay);
+    $('#ikarus_ai_editor_profile').val(cfg.profile || '');
+    $('#ikarus_ai_editor_mode').val(cfg.mode === 'krea2' ? 'krea2' : 'all');
+    $('#ikarus_ai_editor_websearch').prop('checked', cfg.webSearch === true);
+
+    let pendingPlan = [];
+    const close = () => overlay.remove();
+    $('#ikarus_ai_editor_close').on('click', close);
+    $('#ikarus_ai_editor_profile').on('change', function () { s().aiEditor.profile = $(this).val(); saveSettingsDebounced(); });
+    $('#ikarus_ai_editor_mode').on('change', function () { s().aiEditor.mode = $(this).val(); pendingPlan = []; $('#ikarus_ai_editor_apply').prop('disabled', true); $('#ikarus_ai_editor_preview').empty(); saveSettingsDebounced(); });
+    $('#ikarus_ai_editor_websearch').on('change', function () { s().aiEditor.webSearch = $(this).prop('checked'); saveSettingsDebounced(); });
+
+    $('#ikarus_ai_editor_send').on('click', async function () {
+        const request = $('#ikarus_ai_editor_request').val()?.trim() || '';
+        if (!request) { toastr.warning('Describe what the AI should change'); return; }
+        if (getCurrentCharId() !== charId) { toastr.error('The active character changed. Reopen the AI editor.'); close(); return; }
+        const mode = $('#ikarus_ai_editor_mode').val() === 'krea2' ? 'krea2' : 'all';
+        const rules = aiEditorCharacterRules();
+        const flags = parseAiEditorFlags(request);
+        const visible = rules.map(r => mode === 'krea2'
+            ? { id: r.id, name: r.name, triggers: r.trigger, krea2: r.krea2 || '' }
+            : { id: r.id, name: r.name, triggers: r.trigger, tags: r.replacement || '', caption: r.caption || '', krea2: r.krea2 || '' });
+        const fieldRule = mode === 'krea2'
+            ? 'Mode: Krea 2 only. Each operation may contain only "triggers" and "krea2". Any other text field will be discarded.'
+            : 'Mode: all formats. Each operation may contain "triggers", "tags" (danbooru-style comma tags), "caption" (natural language), and "krea2" (Krea 2 description).';
+        const system = `You edit image-prompt replacement rules for characters of one roleplay card. Return strict JSON only, with no Markdown or commentary, using this schema:
+{"operations":[{"action":"update","id":"existing id","triggers":"comma-separated trigger words","krea2":"..."},{"action":"create","name":"New Character","triggers":"...","krea2":"..."},{"action":"remove","id":"existing id"}]}
+Rules:
+- "update" must reference an existing id from the current list. Include only fields you change.
+- "triggers" replaces the full trigger list; keep useful existing triggers when adding new ones.
+- Use "create" only for characters the user wants added. Use "remove" only when the user explicitly asks.
+- Never invent ids.
+${fieldRule}`;
+        let searchBlock = '';
+        const button = $(this).prop('disabled', true);
+        $('#ikarus_ai_editor_apply').prop('disabled', true);
+        try {
+            if ($('#ikarus_ai_editor_websearch').prop('checked')) {
+                $('#ikarus_ai_editor_status').text('Searching the web...');
+                try {
+                    const results = await aiEditorWebSearch(`${charName} ${stripAiEditorFlags(request)}`.slice(0, 300));
+                    if (results.trim()) searchBlock = `\n\n<web_search_results>\n${results}\n</web_search_results>`;
+                } catch (e) { toastr.warning(`Web search skipped: ${e.message || e}`); }
+            }
+            $('#ikarus_ai_editor_status').text('Waiting for AI...');
+            const user = `Card: ${charName}\n\nCurrent character replacement list:\n${visible.length ? JSON.stringify(visible, null, 2) : 'No character replacements exist yet.'}${searchBlock}\n\nUser request:\n${request}`;
+            const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
+            const context = getContext();
+            const response = await sendRequestWithNativeFallback(context, $('#ikarus_ai_editor_profile').val() || '', messages, { stream: false }, `${system}\n\n${user}`, 'AI editor');
+            let raw = '';
+            if (typeof response === 'function') { for await (const chunk of response()) if (chunk?.text !== undefined) raw = chunk.text; }
+            else if (response && typeof response === 'object') raw = response.content || response.text || '';
+            else raw = String(response || '');
+            const { plan, ignored } = buildAiEditorPlan(raw, mode, flags, rules);
+            pendingPlan = plan;
+            renderAiEditorPreview(plan, ignored);
+            $('#ikarus_ai_editor_apply').prop('disabled', !plan.length);
+            $('#ikarus_ai_editor_status').text(plan.length ? `${plan.length} change(s) ready. Review, then apply.` : 'No applicable changes.');
+        } catch (e) {
+            $('#ikarus_ai_editor_status').text('Failed');
+            toastr.error(`AI editor: ${e.message || e}`);
+            console.error(`[${EXT}] AI editor error:`, e);
+        } finally { button.prop('disabled', false); }
+    });
+
+    $('#ikarus_ai_editor_apply').on('click', function () {
+        if (!pendingPlan.length) return;
+        if (getCurrentCharId() !== charId) { toastr.error('The active character changed. Changes were not applied.'); return; }
+        const result = applyAiEditorPlan(pendingPlan, charId);
+        pendingPlan = [];
+        $(this).prop('disabled', true);
+        saveSettingsDebounced();
+        renderReplacementList();
+        if (typeof updatePromptTester === 'function') updatePromptTester();
+        $('#ikarus_ai_editor_status').text(`Applied: ${result.updated} updated, ${result.created} created, ${result.removed} removed.`);
+        toastr.success(`AI editor applied ${result.updated + result.created + result.removed} change(s)`);
+    });
+}
+
 let _addChildParentId = null;
 
 async function createSettings(html) {
@@ -2729,6 +3011,7 @@ async function createSettings(html) {
         transferItem(c.data('id'), c.data('type'));
     });
     $('#ikarus_rep_manage').on('click', openGlobalManager);
+    $('#ikarus_rep_ai').on('click', openAiReplacementEditor);
     $('#ikarus_library_manage').on('click', openGlobalManager);
 
     updateUI();
