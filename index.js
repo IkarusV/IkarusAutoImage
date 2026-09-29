@@ -59,7 +59,7 @@ const DEFAULT_SETTINGS = {
     doubleCleaner: { mode: 'none', tags: '' }, // mode: 'none' | 'all' | 'listed'
     loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
     hideToasts: false,
-    aiEditor: { profile: '', mode: 'all', webSearch: false }, // AI character replacement editor
+    aiEditor: { profile: '', mode: 'all', webSearch: false, ultimateControl: true }, // AI character replacement editor
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -2571,12 +2571,29 @@ async function generateFromSelectedMessage(messageId) {
 // ==========================================================================
 // AI Character Replacement Editor (character scope only)
 // ==========================================================================
-// Only enabled parent replacements of the current character are shown to the AI.
+// Only enabled replacements of the current character are shown to the AI (children only with Ultimate control).
 // Removals and creations require explicit --remove / --create flags in the user request.
-function aiEditorCharacterRules() {
+const AI_EDITOR_MODES = {
+    tags: { label: 'Tags only', fields: ['replacement'] },
+    caption: { label: 'Caption only', fields: ['caption'] },
+    krea2: { label: 'Krea 2 only', fields: ['krea2'] },
+    all: { label: 'Tags + Caption + Krea 2', fields: ['replacement', 'caption', 'krea2'] },
+};
+const AI_EDITOR_FIELD_KEYS = { replacement: 'tags', caption: 'caption', krea2: 'krea2' };
+const AI_EDITOR_GROUP_MODES = ['OR', 'AND', 'XOR', 'NOR', 'CHILD'];
+const AI_EDITOR_PARENT_KEYS = ['parent', 'parentName', 'parent_name', 'parentId', 'parent_id', 'parentFilter', 'parent_filter'];
+
+function aiEditorMode(value) { return AI_EDITOR_MODES[value] ? value : 'all'; }
+function aiEditorKey(value) { return String(value ?? '').trim().toLowerCase(); }
+
+function aiEditorCharacterRules(includeChildren = false) {
     const cid = getCurrentCharId();
     if (!cid) return [];
-    return (s().replacements || []).filter(r => r.scope === 'char' && r.charId === cid && !r.parentId && r.enabled);
+    const own = (s().replacements || []).filter(r => r.scope === 'char' && r.charId === cid && r.enabled);
+    const parents = own.filter(r => !r.parentId);
+    if (!includeChildren) return parents;
+    const parentIds = new Set(parents.map(r => r.id));
+    return parents.concat(own.filter(r => r.parentId && parentIds.has(r.parentId)));
 }
 
 function parseAiEditorFlags(text) {
@@ -2620,99 +2637,253 @@ function aiEditorText(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
 
+function aiEditorGroups(value) {
+    if (!Array.isArray(value)) return null;
+    const out = [];
+    for (const g of value) {
+        const obj = g && typeof g === 'object' && !Array.isArray(g);
+        const trigger = aiEditorText(obj ? (g.trigger ?? g.triggers ?? g.words) : g);
+        if (!trigger) continue;
+        let mode = String((obj && (g.mode ?? g.matchMode ?? g.type)) || 'OR').trim().toUpperCase().split(/[\s(]/)[0];
+        if (!AI_EDITOR_GROUP_MODES.includes(mode)) mode = 'OR';
+        out.push({ trigger, matchMode: mode });
+    }
+    return out;
+}
+
+// CHILD is only valid on the first group of a child rule.
+function aiEditorFixGroups(groups, isChild) {
+    return groups.map((g, i) => ({ trigger: g.trigger, matchMode: g.matchMode === 'CHILD' && (i > 0 || !isChild) ? 'OR' : g.matchMode }));
+}
+
+function aiEditorReplaceMode(value) {
+    const k = aiEditorKey(value).replace(/[\s,-]+/g, '_');
+    if (k === 'first' || k === 'first_occurrence') return 'first';
+    if (k === 'all' || k === 'all_occurrences') return 'all';
+    if (k.startsWith('first_full')) return 'first_full';
+    return '';
+}
+
+function aiEditorGroupsLabel(groups) { return groups.map(g => `${g.trigger} (${g.matchMode})`).join(' AND '); }
+
+function aiEditorVisibleRule(r, mode, ultimate, byId) {
+    const o = { id: r.id, name: r.name };
+    if (ultimate) {
+        o.parent = r.parentId ? (byId.get(r.parentId)?.name || r.parentId) : null;
+        o.triggerGroups = normalizeReplacementTriggerGroups(r).map(g => ({ trigger: g.trigger, mode: g.matchMode }));
+        o.replaceMode = r.replaceMode || 'first';
+        o.priority = r.priority || 0;
+        if (r.replaceMode === 'first_full' || r.shortTag) o.shortTag = r.shortTag || '';
+    } else o.triggers = r.trigger;
+    for (const f of AI_EDITOR_MODES[mode].fields) o[AI_EDITOR_FIELD_KEYS[f]] = r[f] || '';
+    return o;
+}
+
+function aiEditorPickFields(op, mode, ultimate) {
+    const fields = {};
+    const groups = ultimate ? aiEditorGroups(op.triggerGroups ?? op.trigger_groups) : null;
+    if (groups?.length) fields.triggerGroups = groups;
+    else {
+        const trigger = aiEditorText(op.triggers ?? op.trigger);
+        if (trigger) fields.trigger = trigger;
+    }
+    const allowed = AI_EDITOR_MODES[mode].fields;
+    const texts = { replacement: op.tags ?? op.replacement, caption: op.caption, krea2: op.krea2 };
+    for (const f of allowed) { const v = aiEditorText(texts[f]); if (v) fields[f] = v; }
+    if (ultimate) {
+        const rm = aiEditorReplaceMode(op.replaceMode ?? op.replace_mode);
+        if (rm) fields.replaceMode = rm;
+        if (op.shortTag !== undefined || op.short_tag !== undefined) fields.shortTag = aiEditorText(op.shortTag ?? op.short_tag);
+        const pr = op.priority;
+        if (pr !== undefined && pr !== null && pr !== '' && Number.isFinite(Number(pr))) fields.priority = Math.trunc(Number(pr));
+        const newName = String(op.newName ?? op.rename ?? '').trim();
+        if (newName) fields.name = newName;
+        if (op.enabled === false) fields.enabled = false;
+    }
+    return fields;
+}
+
+function aiEditorParentRef(op, ultimate) {
+    if (!ultimate || !op || typeof op !== 'object') return undefined;
+    for (const k of AI_EDITOR_PARENT_KEYS) {
+        if (Object.prototype.hasOwnProperty.call(op, k)) return op[k] === null || op[k] === undefined ? '' : String(op[k]).trim();
+    }
+    return undefined;
+}
+
 // Converts raw AI output into a safe, validated plan. Pure function for testability.
-function buildAiEditorPlan(raw, mode, flags, rules) {
+function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
+    mode = aiEditorMode(mode);
     const ops = parseAiEditorJson(raw);
     if (!ops) return { plan: [], ignored: ['The AI response was not valid JSON.'] };
     const byId = new Map(rules.map(r => [r.id, r]));
-    const byName = new Map(rules.map(r => [String(r.name || '').trim().toLowerCase(), r]));
-    const plan = [], ignored = [], touched = new Set();
-
-    const pickFields = (op) => {
-        const fields = {};
-        const trigger = aiEditorText(op.triggers ?? op.trigger);
-        if (trigger) fields.trigger = trigger;
-        const krea2 = aiEditorText(op.krea2);
-        if (krea2) fields.krea2 = krea2;
-        if (mode !== 'krea2') {
-            const tags = aiEditorText(op.tags ?? op.replacement);
-            const caption = aiEditorText(op.caption);
-            if (tags) fields.replacement = tags;
-            if (caption) fields.caption = caption;
-        }
-        return fields;
-    };
+    const nameCount = new Map();
+    for (const r of rules) nameCount.set(aiEditorKey(r.name), (nameCount.get(aiEditorKey(r.name)) || 0) + 1);
+    const byName = new Map(rules.filter(r => nameCount.get(aiEditorKey(r.name)) === 1).map(r => [aiEditorKey(r.name), r]));
+    const hasChildren = new Set(rules.filter(r => r.parentId).map(r => r.parentId));
+    const plan = [], ignored = [], touched = new Set(), removed = new Set();
+    const creates = [], updates = [];
 
     for (const op of ops) {
-        const action = String(op?.action || 'update').toLowerCase();
-        const target = byId.get(op?.id) || byName.get(String(op?.name || '').trim().toLowerCase());
-        const label = String(op?.name || op?.id || '(unnamed)');
+        if (!op || typeof op !== 'object') continue;
+        const action = aiEditorKey(op.action || 'update');
+        const target = byId.get(op.id) || byName.get(aiEditorKey(op.name));
+        const label = String(op.name || op.id || '(unnamed)');
 
-        if (action === 'remove') {
-            if (!target) { ignored.push(`Remove "${label}": character not found`); continue; }
-            if (!flags.remove.has(String(target.name).trim().toLowerCase())) { ignored.push(`Remove "${target.name}": missing --remove ${target.name}`); continue; }
+        if (action === 'remove' || action === 'delete') {
+            if (!target) { ignored.push(`Remove "${label}": replacement not found`); continue; }
+            const parent = target.parentId ? byId.get(target.parentId) : null;
+            const allowed = flags.remove.has(aiEditorKey(target.name)) || (parent && flags.remove.has(aiEditorKey(parent.name)));
+            if (!allowed) { ignored.push(`Remove "${target.name}": missing --remove ${target.name}`); continue; }
             if (touched.has(target.id)) continue;
             touched.add(target.id);
+            removed.add(target.id);
             plan.push({ type: 'remove', target });
             continue;
         }
-
+        const fields = aiEditorPickFields(op, mode, ultimate);
+        const parentRef = aiEditorParentRef(op, ultimate);
         if (action === 'create' && !target) {
-            const name = String(op?.name || '').trim();
+            const name = String(op.name || '').trim();
             if (!name) { ignored.push('Create: missing name'); continue; }
-            if (!flags.createAll && !flags.create.has(name.toLowerCase())) { ignored.push(`Create "${name}": missing --create ${name}`); continue; }
-            const fields = pickFields(op);
-            if (!fields.krea2 && !fields.replacement && !fields.caption) { ignored.push(`Create "${name}": no replacement text`); continue; }
-            if (plan.some(x => x.type === 'create' && x.name.toLowerCase() === name.toLowerCase())) continue;
-            plan.push({ type: 'create', name, fields });
+            if (creates.some(c => aiEditorKey(c.name) === aiEditorKey(name))) continue;
+            delete fields.name;
+            creates.push({ name, fields, parentRef: parentRef || '' });
             continue;
         }
-
-        // update (also covers "create" for a character that already exists)
-        if (!target) { ignored.push(`Update "${label}": character not found (ignored)`); continue; }
+        // update (also covers "create" for a replacement that already exists)
+        if (!target) { ignored.push(`Update "${label}": replacement not found (ignored)`); continue; }
         if (touched.has(target.id)) continue;
-        const fields = pickFields(op);
-        if (!Object.keys(fields).length) { ignored.push(`Update "${target.name}": no allowed fields changed`); continue; }
         touched.add(target.id);
+        updates.push({ target, fields, parentRef });
+    }
+
+    const willBeChild = new Set(updates.filter(u => u.parentRef).map(u => u.target.id));
+    const createdNames = new Map();
+    const resolveParent = (ref, selfId) => {
+        const existing = byId.get(ref) || byName.get(aiEditorKey(ref));
+        if (existing) {
+            if (existing.id === selfId) return { error: 'cannot be its own parent' };
+            if (existing.parentId || willBeChild.has(existing.id)) return { error: `"${existing.name}" is a child and cannot have children` };
+            if (removed.has(existing.id)) return { error: `"${existing.name}" is being removed` };
+            return { id: existing.id, name: existing.name };
+        }
+        const created = createdNames.get(aiEditorKey(ref));
+        if (created) return { createName: created.name, name: created.name };
+        if (creates.some(c => c.parentRef && aiEditorKey(c.name) === aiEditorKey(ref))) return { error: `"${ref}" is a child and cannot have children` };
+        return { error: `parent "${ref}" not found` };
+    };
+
+    // Top-level creations first so children can reference them regardless of JSON order.
+    for (const c of [...creates.filter(x => !x.parentRef), ...creates.filter(x => x.parentRef)]) {
+        let parent = null;
+        if (c.parentRef) {
+            parent = resolveParent(c.parentRef, null);
+            if (parent.error) { ignored.push(`Create "${c.name}": ${parent.error}`); continue; }
+        }
+        const allowed = flags.createAll || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
+        if (!allowed) { ignored.push(`Create "${c.name}": missing --create ${parent ? parent.name : c.name}`); continue; }
+        if (!c.fields.krea2 && !c.fields.replacement && !c.fields.caption) { ignored.push(`Create "${c.name}": no replacement text`); continue; }
+        if (c.fields.triggerGroups) c.fields.triggerGroups = aiEditorFixGroups(c.fields.triggerGroups, !!parent);
+        if (!parent) createdNames.set(aiEditorKey(c.name), c);
+        plan.push({ type: 'create', name: c.name, fields: c.fields, parent });
+    }
+
+    for (const u of updates) {
+        const { target, fields } = u;
+        let effectiveChild = !!target.parentId;
+        if (u.parentRef !== undefined) {
+            if (u.parentRef === '') {
+                if (target.parentId) { fields.parent = null; effectiveChild = false; }
+            } else if (hasChildren.has(target.id)) {
+                ignored.push(`Update "${target.name}": has children, so it cannot become a child`);
+            } else {
+                const parent = resolveParent(u.parentRef, target.id);
+                if (parent.error) ignored.push(`Update "${target.name}": ${parent.error}`);
+                else if (parent.id !== target.parentId) { fields.parent = parent; effectiveChild = true; }
+            }
+        }
+        const current = normalizeReplacementTriggerGroups(target);
+        if (fields.triggerGroups) fields.triggerGroups = aiEditorFixGroups(fields.triggerGroups, effectiveChild);
+        else if (!effectiveChild && current[0]?.matchMode === 'CHILD') fields.triggerGroups = aiEditorFixGroups(fields.trigger ? [{ ...current[0], trigger: fields.trigger }, ...current.slice(1)] : current, false);
+        if (fields.triggerGroups) delete fields.trigger;
+        // Drop fields that do not change anything.
+        if (fields.triggerGroups && JSON.stringify(fields.triggerGroups) === JSON.stringify(current)) delete fields.triggerGroups;
+        if (fields.trigger && fields.trigger === target.trigger) delete fields.trigger;
+        for (const k of ['name', 'replacement', 'caption', 'krea2', 'replaceMode', 'shortTag']) if (k in fields && fields[k] === (target[k] ?? (k === 'replaceMode' ? 'first' : ''))) delete fields[k];
+        if ('priority' in fields && fields.priority === (target.priority || 0)) delete fields.priority;
+        if (!Object.keys(fields).length) { ignored.push(`Update "${target.name}": no allowed fields changed`); continue; }
         plan.push({ type: 'update', target, fields });
     }
     return { plan, ignored };
 }
 
+function aiEditorAssignFields(r, f) {
+    if (f.name) r.name = f.name;
+    if (f.triggerGroups) {
+        r.triggerGroups = f.triggerGroups.map(g => ({ ...g }));
+        r.trigger = f.triggerGroups[0].trigger;
+        r.matchMode = f.triggerGroups[0].matchMode;
+    } else if (f.trigger) {
+        const groups = normalizeReplacementTriggerGroups(r);
+        if (groups.length) groups[0].trigger = f.trigger;
+        else groups.push({ trigger: f.trigger, matchMode: r.matchMode || 'OR' });
+        r.triggerGroups = groups;
+        r.trigger = f.trigger;
+    }
+    if (f.replacement) r.replacement = f.replacement;
+    if (f.caption) r.caption = f.caption;
+    if (f.krea2) r.krea2 = f.krea2;
+    if (f.replaceMode) r.replaceMode = f.replaceMode;
+    if ('shortTag' in f) r.shortTag = f.shortTag;
+    if ('priority' in f) r.priority = f.priority;
+    if (f.enabled === false) r.enabled = false;
+}
+
 function applyAiEditorPlan(plan, charId) {
     const es = s();
     let updated = 0, created = 0, removed = 0;
+    const createdIds = new Map();
+    const pendingParents = [];
+    const parentIdOf = (p) => {
+        if (!p) return null;
+        if (p.createName) return createdIds.get(aiEditorKey(p.createName)) || null;
+        return es.replacements.some(x => x.id === p.id && !x.parentId) ? p.id : null;
+    };
+    for (const item of plan.filter(x => x.type === 'create')) {
+        const f = item.fields;
+        const text = f.krea2 || f.caption || f.replacement;
+        const groups = f.triggerGroups || [{ trigger: f.trigger || item.name, matchMode: 'OR' }];
+        const rule = {
+            id: uid(), name: item.name, scope: 'char', charId,
+            trigger: groups[0].trigger, matchMode: groups[0].matchMode, triggerGroups: groups.map(g => ({ ...g })),
+            replacement: f.replacement || text, caption: f.caption || text, krea2: f.krea2 || text,
+            shortTag: f.shortTag || '', replaceMode: f.replaceMode || 'first', priority: f.priority || 0, parentId: null, enabled: f.enabled !== false, folder: '',
+        };
+        es.replacements.push(rule);
+        if (!item.parent) createdIds.set(aiEditorKey(item.name), rule.id);
+        else pendingParents.push([rule, item.parent]);
+        created++;
+    }
     for (const item of plan) {
         if (item.type === 'update') {
             const r = es.replacements.find(x => x.id === item.target.id);
             if (!r) continue;
-            const f = item.fields;
-            if (f.trigger) {
-                const groups = normalizeReplacementTriggerGroups(r);
-                if (groups.length) groups[0].trigger = f.trigger;
-                else groups.push({ trigger: f.trigger, matchMode: r.matchMode || 'OR' });
-                r.triggerGroups = groups;
-                r.trigger = f.trigger;
-            }
-            if (f.replacement) r.replacement = f.replacement;
-            if (f.caption) r.caption = f.caption;
-            if (f.krea2) r.krea2 = f.krea2;
+            aiEditorAssignFields(r, item.fields);
+            if ('parent' in item.fields) pendingParents.push([r, item.fields.parent]);
             updated++;
         } else if (item.type === 'remove') {
             const before = es.replacements.length;
             es.replacements = es.replacements.filter(x => x.id !== item.target.id && x.parentId !== item.target.id);
             if (es.replacements.length !== before) removed++;
-        } else if (item.type === 'create') {
-            const f = item.fields;
-            const trigger = f.trigger || item.name;
-            const text = f.krea2 || f.caption || f.replacement;
-            es.replacements.push({
-                id: uid(), name: item.name, scope: 'char', charId,
-                trigger, matchMode: 'OR', triggerGroups: [{ trigger, matchMode: 'OR' }],
-                replacement: f.replacement || text, caption: f.caption || text, krea2: f.krea2 || text,
-                shortTag: '', replaceMode: 'first', priority: 0, parentId: null, enabled: true, folder: '',
-            });
-            created++;
+        }
+    }
+    for (const [rule, parent] of pendingParents) {
+        const pid = parentIdOf(parent);
+        rule.parentId = pid && !es.replacements.some(x => x.parentId === rule.id) ? pid : null;
+        if (!rule.parentId && rule.matchMode === 'CHILD') {
+            rule.triggerGroups = aiEditorFixGroups(normalizeReplacementTriggerGroups(rule), false);
+            rule.matchMode = rule.triggerGroups[0]?.matchMode || 'OR';
         }
     }
     return { updated, created, removed };
@@ -2726,20 +2897,73 @@ async function aiEditorWebSearch(query) {
 }
 
 function renderAiEditorPreview(plan, ignored) {
+    const all = s().replacements || [];
+    const nameOf = id => all.find(r => r.id === id)?.name || '';
+    const labels = { name: 'Name', trigger: 'Triggers', triggerGroups: 'Trigger groups', parent: 'Parent', replaceMode: 'Mode', priority: 'Priority', shortTag: 'Short tag', enabled: 'Enabled', replacement: 'Tags', caption: 'Caption', krea2: 'Krea 2' };
+    const modeLabels = { first: 'First occurrence', all: 'All occurrences', first_full: 'First full, rest dedupe' };
+    const show = (k, v) => k === 'triggerGroups' ? aiEditorGroupsLabel(v)
+        : k === 'parent' ? (v ? v.name : '(top-level)')
+            : k === 'replaceMode' ? (modeLabels[v] || v)
+                : k === 'enabled' ? (v ? 'yes' : 'no') : String(v ?? '');
+    const current = (t, k) => k === 'triggerGroups' ? aiEditorGroupsLabel(normalizeReplacementTriggerGroups(t))
+        : k === 'parent' ? (t.parentId ? nameOf(t.parentId) : '(top-level)')
+            : k === 'replaceMode' ? (modeLabels[t.replaceMode || 'first'])
+                : k === 'priority' ? String(t.priority || 0)
+                    : k === 'enabled' ? 'yes' : String(t[k] ?? '');
     const rows = plan.map(item => {
         if (item.type === 'remove') {
-            const kids = (s().replacements || []).filter(r => r.parentId === item.target.id).length;
+            const kids = all.filter(r => r.parentId === item.target.id).length;
             return `<div class="ikarus-ai-op ikarus-ai-op-remove"><b>Remove</b> ${esc(item.target.name)}${kids ? ` (and ${kids} child rule${kids === 1 ? '' : 's'})` : ''}</div>`;
         }
-        const labels = { trigger: 'Triggers', replacement: 'Tags', caption: 'Caption', krea2: 'Krea 2' };
         const fields = Object.entries(item.fields).map(([k, v]) => {
-            const before = item.type === 'update' ? (k === 'trigger' ? item.target.trigger : item.target[k]) : '';
-            return `<div class="ikarus-ai-field"><span>${labels[k]}</span>${before ? `<del>${esc(before)}</del>` : ''}<ins>${esc(v)}</ins></div>`;
+            const before = item.type === 'update' ? current(item.target, k) : '';
+            return `<div class="ikarus-ai-field"><span>${labels[k] || k}</span>${before ? `<del>${esc(before)}</del>` : ''}<ins>${esc(show(k, v))}</ins></div>`;
         }).join('');
-        return `<div class="ikarus-ai-op ikarus-ai-op-${item.type}"><b>${item.type === 'create' ? 'Create' : 'Update'}</b> ${esc(item.type === 'create' ? item.name : item.target.name)}${fields}</div>`;
+        const childOf = item.type === 'create' && item.parent ? ` <i>(child of ${esc(item.parent.name)})</i>` : '';
+        return `<div class="ikarus-ai-op ikarus-ai-op-${item.type}"><b>${item.type === 'create' ? 'Create' : 'Update'}</b> ${esc(item.type === 'create' ? item.name : item.target.name)}${childOf}${fields}</div>`;
     }).join('');
     const skipped = ignored.length ? `<div class="ikarus-ai-ignored"><b>Ignored (${ignored.length})</b>${ignored.map(x => `<div>${esc(x)}</div>`).join('')}</div>` : '';
     $('#ikarus_ai_editor_preview').html((rows || '<div class="ikarus-hint">No applicable changes.</div>') + skipped);
+}
+
+function aiEditorSystemPrompt(mode, ultimate) {
+    const fields = AI_EDITOR_MODES[mode].fields.map(f => ({
+        replacement: '"tags" (danbooru-style comma-separated tags)',
+        caption: '"caption" (natural-language description)',
+        krea2: '"krea2" (Krea 2 description)',
+    }[f]));
+    const fieldRule = `Mode: ${AI_EDITOR_MODES[mode].label}. Replacement text fields allowed: ${fields.join(', ')}. Any other replacement text field will be discarded.`;
+    const textKey = AI_EDITOR_FIELD_KEYS[AI_EDITOR_MODES[mode].fields[0]];
+    if (!ultimate) {
+        return `You edit image-prompt replacement rules for characters of one roleplay card. Return strict JSON only, with no Markdown or commentary, using this schema:
+{"operations":[{"action":"update","id":"existing id","triggers":"comma-separated trigger words","${textKey}":"..."},{"action":"create","name":"New Character","triggers":"...","${textKey}":"..."},{"action":"remove","id":"existing id"}]}
+Rules:
+- "update" must reference an existing id from the current list. Include only fields you change.
+- "triggers" replaces the full trigger list; keep useful existing triggers when adding new ones.
+- Use "create" only for characters the user wants added. Use "remove" only when the user explicitly asks.
+- Never invent ids.
+${fieldRule}`;
+    }
+    return `You edit image-prompt replacement rules of one roleplay card. A rule finds trigger words in an image prompt and replaces them with its replacement text. Return strict JSON only, with no Markdown or commentary, using this schema:
+{"operations":[
+ {"action":"update","id":"existing id", "...only the fields you change..."},
+ {"action":"create","name":"Erza Scarlet","triggerGroups":[{"trigger":"erza, erza scarlet","mode":"OR"}],"replaceMode":"all","priority":0,"${textKey}":"..."},
+ {"action":"create","name":"Erza Heaven's Wheel Armor","parent":"Erza Scarlet","triggerGroups":[{"trigger":"armor","mode":"CHILD"},{"trigger":"swords, blades","mode":"OR"}],"replaceMode":"all","priority":5,"${textKey}":"..."},
+ {"action":"remove","id":"existing id"}
+]}
+Fields:
+- "name": name of a new rule. To rename an existing rule use "newName".
+- "triggerGroups": ordered list that replaces ALL trigger groups of the rule. Group 1 holds the comma-separated words that get replaced in the prompt. Every additional group is a condition that must also be true for the rule to fire. "mode" per group: "OR" (any word present), "AND" (all words present), "XOR" (exactly one word present), "NOR" (no word present). "CHILD" is allowed only on group 1 of a child rule and means "fire only when the parent rule fired".
+- "parent": name or id of a top-level rule (existing, or created in this same response) that makes this rule its child. Children cannot have children. Use "parent": null to turn an existing child into a top-level rule. Operations may appear in any order; a child may be listed far from its parent.
+- "replaceMode": "first" (first occurrence), "all" (all occurrences), or "first_full" (first occurrence gets the full text, later ones get "shortTag").
+- "shortTag": short text used by "first_full" for repeated occurrences.
+- "priority": integer, higher runs first. Among CHILD rules sharing a trigger word, only the highest priority fires.
+- "enabled": false disables a rule.
+Rules:
+- "update" must reference an existing id from the current list. Include only fields you change. Never invent ids.
+- Child triggers and conditions are checked against the prompt after the parent replacement has been applied, so choose condition words that cannot come from the parent's own replacement text.
+- Use "create" only for rules the user wants added. Use "remove" only when the user explicitly asks.
+${fieldRule}`;
 }
 
 function openAiReplacementEditor() {
@@ -2750,19 +2974,21 @@ function openAiReplacementEditor() {
     const cfg = s().aiEditor;
     const profiles = (() => { try { return getContext().extensionSettings?.connectionManager?.profiles || []; } catch { return []; } })();
     const profileOptions = ['<option value="">Same as Current</option>'].concat(profiles.map(p => `<option value="${esc(p.id)}">${esc(p.name)}</option>`)).join('');
+    const modeOptions = Object.entries(AI_EDITOR_MODES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
     const overlay = $(`
     <div id="ikarus_ai_editor_overlay" class="ikarus-manager-overlay">
       <div class="ikarus-manager-popup ikarus-ai-editor-popup">
         <div class="ikarus-manager-header"><span>AI Character Replacement Editor - ${esc(charName)}</span><button id="ikarus_ai_editor_close" class="menu_button">&#10005;</button></div>
         <div class="ikarus-ai-editor-body">
-          <div class="ikarus-hint">Edits only this character's replacements. Global replacements, disabled replacements, and child rules are invisible to the AI and never changed. Unknown characters in the AI answer are ignored.</div>
+          <div class="ikarus-hint">Edits only this character's replacements. Global and disabled replacements are invisible to the AI and never changed. Child rules are included only with Ultimate control. Unknown replacements in the AI answer are ignored.</div>
           <div class="ikarus-ai-editor-row">
             <label>Profile <select id="ikarus_ai_editor_profile" class="text_pole">${profileOptions}</select></label>
-            <label>Mode <select id="ikarus_ai_editor_mode" class="text_pole"><option value="krea2">Krea 2 only</option><option value="all">Tags + Caption + Krea 2</option></select></label>
+            <label>Mode <select id="ikarus_ai_editor_mode" class="text_pole">${modeOptions}</select></label>
           </div>
           <label class="ikarus-toggle"><input type="checkbox" id="ikarus_ai_editor_websearch"><span>Add SillyTavern internet search (Unfinished/test feature)</span></label>
-          <textarea id="ikarus_ai_editor_request" class="text_pole" rows="5" placeholder="e.g. Update Erza and all my Fairy Tail characters for Krea 2 using the format 'Erza (from Fairy Tail)', and add more triggers."></textarea>
-          <div class="ikarus-hint">Safety flags, one per line or comma-separated: <code>--create Natsu, Gray</code> allows creating those characters (<code>--create *</code> allows any). <code>--remove Juvia</code> allows removing that character. Without a flag, creations and removals are ignored.</div>
+          <label class="ikarus-toggle" title="Lets the AI change names, trigger groups and their OR/AND/XOR/NOR/CHILD modes, replacement mode, priority, short tag, and parent/child links."><input type="checkbox" id="ikarus_ai_editor_ultimate"><span>Ultimate control for every field modification</span></label>
+          <textarea id="ikarus_ai_editor_request" class="text_pole" rows="5" placeholder="e.g. Create Erza's 5 main armors as child replacements of Erza: when a sword name is detected, replace the word armor. --create Erza"></textarea>
+          <div class="ikarus-hint">Safety flags, one per line or comma-separated: <code>--create Natsu, Gray</code> allows creating those replacements (<code>--create *</code> allows any; with Ultimate control, <code>--create Erza</code> also allows new children of Erza). <code>--remove Juvia</code> allows removing that replacement (and its children). Without a flag, creations and removals are ignored.</div>
           <div class="ikarus-ai-editor-actions"><button id="ikarus_ai_editor_send" class="menu_button">Ask AI</button><button id="ikarus_ai_editor_apply" class="menu_button" disabled>Apply changes</button><span id="ikarus_ai_editor_status"></span></div>
           <div id="ikarus_ai_editor_preview"></div>
         </div>
@@ -2770,37 +2996,30 @@ function openAiReplacementEditor() {
     </div>`);
     $('body').append(overlay);
     $('#ikarus_ai_editor_profile').val(cfg.profile || '');
-    $('#ikarus_ai_editor_mode').val(cfg.mode === 'krea2' ? 'krea2' : 'all');
+    $('#ikarus_ai_editor_mode').val(aiEditorMode(cfg.mode));
     $('#ikarus_ai_editor_websearch').prop('checked', cfg.webSearch === true);
+    $('#ikarus_ai_editor_ultimate').prop('checked', cfg.ultimateControl !== false);
 
     let pendingPlan = [];
     const close = () => overlay.remove();
+    const resetPlan = () => { pendingPlan = []; $('#ikarus_ai_editor_apply').prop('disabled', true); $('#ikarus_ai_editor_preview').empty(); $('#ikarus_ai_editor_status').text(''); };
     $('#ikarus_ai_editor_close').on('click', close);
     $('#ikarus_ai_editor_profile').on('change', function () { s().aiEditor.profile = $(this).val(); saveSettingsDebounced(); });
-    $('#ikarus_ai_editor_mode').on('change', function () { s().aiEditor.mode = $(this).val(); pendingPlan = []; $('#ikarus_ai_editor_apply').prop('disabled', true); $('#ikarus_ai_editor_preview').empty(); saveSettingsDebounced(); });
+    $('#ikarus_ai_editor_mode').on('change', function () { s().aiEditor.mode = aiEditorMode($(this).val()); resetPlan(); saveSettingsDebounced(); });
     $('#ikarus_ai_editor_websearch').on('change', function () { s().aiEditor.webSearch = $(this).prop('checked'); saveSettingsDebounced(); });
+    $('#ikarus_ai_editor_ultimate').on('change', function () { s().aiEditor.ultimateControl = $(this).prop('checked'); resetPlan(); saveSettingsDebounced(); });
 
     $('#ikarus_ai_editor_send').on('click', async function () {
         const request = $('#ikarus_ai_editor_request').val()?.trim() || '';
         if (!request) { toastr.warning('Describe what the AI should change'); return; }
         if (getCurrentCharId() !== charId) { toastr.error('The active character changed. Reopen the AI editor.'); close(); return; }
-        const mode = $('#ikarus_ai_editor_mode').val() === 'krea2' ? 'krea2' : 'all';
-        const rules = aiEditorCharacterRules();
+        const mode = aiEditorMode($('#ikarus_ai_editor_mode').val());
+        const ultimate = $('#ikarus_ai_editor_ultimate').prop('checked');
+        const rules = aiEditorCharacterRules(ultimate);
         const flags = parseAiEditorFlags(request);
-        const visible = rules.map(r => mode === 'krea2'
-            ? { id: r.id, name: r.name, triggers: r.trigger, krea2: r.krea2 || '' }
-            : { id: r.id, name: r.name, triggers: r.trigger, tags: r.replacement || '', caption: r.caption || '', krea2: r.krea2 || '' });
-        const fieldRule = mode === 'krea2'
-            ? 'Mode: Krea 2 only. Each operation may contain only "triggers" and "krea2". Any other text field will be discarded.'
-            : 'Mode: all formats. Each operation may contain "triggers", "tags" (danbooru-style comma tags), "caption" (natural language), and "krea2" (Krea 2 description).';
-        const system = `You edit image-prompt replacement rules for characters of one roleplay card. Return strict JSON only, with no Markdown or commentary, using this schema:
-{"operations":[{"action":"update","id":"existing id","triggers":"comma-separated trigger words","krea2":"..."},{"action":"create","name":"New Character","triggers":"...","krea2":"..."},{"action":"remove","id":"existing id"}]}
-Rules:
-- "update" must reference an existing id from the current list. Include only fields you change.
-- "triggers" replaces the full trigger list; keep useful existing triggers when adding new ones.
-- Use "create" only for characters the user wants added. Use "remove" only when the user explicitly asks.
-- Never invent ids.
-${fieldRule}`;
+        const byId = new Map(rules.map(r => [r.id, r]));
+        const visible = rules.map(r => aiEditorVisibleRule(r, mode, ultimate, byId));
+        const system = aiEditorSystemPrompt(mode, ultimate);
         let searchBlock = '';
         const button = $(this).prop('disabled', true);
         $('#ikarus_ai_editor_apply').prop('disabled', true);
@@ -2813,7 +3032,7 @@ ${fieldRule}`;
                 } catch (e) { toastr.warning(`Web search skipped: ${e.message || e}`); }
             }
             $('#ikarus_ai_editor_status').text('Waiting for AI...');
-            const user = `Card: ${charName}\n\nCurrent character replacement list:\n${visible.length ? JSON.stringify(visible, null, 2) : 'No character replacements exist yet.'}${searchBlock}\n\nUser request:\n${request}`;
+            const user = `Card: ${charName}\n\nCurrent replacement list:\n${visible.length ? JSON.stringify(visible, null, 2) : 'No character replacements exist yet.'}${searchBlock}\n\nUser request:\n${request}`;
             const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
             const context = getContext();
             const response = await sendRequestWithNativeFallback(context, $('#ikarus_ai_editor_profile').val() || '', messages, { stream: false }, `${system}\n\n${user}`, 'AI editor');
@@ -2821,7 +3040,7 @@ ${fieldRule}`;
             if (typeof response === 'function') { for await (const chunk of response()) if (chunk?.text !== undefined) raw = chunk.text; }
             else if (response && typeof response === 'object') raw = response.content || response.text || '';
             else raw = String(response || '');
-            const { plan, ignored } = buildAiEditorPlan(raw, mode, flags, rules);
+            const { plan, ignored } = buildAiEditorPlan(raw, mode, flags, rules, ultimate);
             pendingPlan = plan;
             renderAiEditorPreview(plan, ignored);
             $('#ikarus_ai_editor_apply').prop('disabled', !plan.length);
