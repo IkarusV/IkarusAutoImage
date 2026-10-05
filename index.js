@@ -60,6 +60,7 @@ const DEFAULT_SETTINGS = {
     loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
     hideToasts: false,
     aiEditor: { profile: '', mode: 'all', webSearch: false, ultimateControl: true }, // AI character replacement editor
+    sceneLibrary: { enabled: false }, // per-chat scene/character library; entries live in chat metadata
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -201,6 +202,7 @@ function ensureSettings() {
     if (es.hideToasts === undefined) es.hideToasts = false;
     if (!es.aiEditor || typeof es.aiEditor !== 'object') es.aiEditor = { ...DEFAULT_SETTINGS.aiEditor };
     for (const [k, v] of Object.entries(DEFAULT_SETTINGS.aiEditor)) if (es.aiEditor[k] === undefined) es.aiEditor[k] = v;
+    if (!es.sceneLibrary || typeof es.sceneLibrary !== 'object') es.sceneLibrary = { ...DEFAULT_SETTINGS.sceneLibrary };
     if (es.autoClean === undefined) es.autoClean = false;
     if (es.autoFixPicFormat === undefined) es.autoFixPicFormat = false;
     if (es.filterNativeSd === undefined) es.filterNativeSd = true;
@@ -266,6 +268,7 @@ function updateUI() {
     loadCharPrefix();
     renderReplacementList();
     renderFilterList();
+    renderSceneLibrary();
 }
 
 // ==========================================================================
@@ -1588,6 +1591,10 @@ function getPromptInjectionText() {
     let promptText = s().promptInjection?.prompt || '';
     const charPrompt = getCharPromptText();
     promptText = promptText.replace(/\{CharacterPersonalised-prompt\}/gi, charPrompt);
+    // Scene/character library: placed at {SceneCharacterLibrary} if present, otherwise appended.
+    const sceneText = getSceneLibraryPromptText();
+    if (/\{SceneCharacterLibrary\}/i.test(promptText)) promptText = promptText.replace(/\{SceneCharacterLibrary\}/gi, () => sceneText);
+    else if (sceneText) promptText = promptText ? `${promptText}\n\n${sceneText}` : sceneText;
     return { promptText, charPrompt };
 }
 
@@ -1763,6 +1770,7 @@ eventSource.on(event_types.CHAT_CHANGED, function () {
     renderReplacementList();
     renderFilterList();
     renderStandaloneGallery();
+    renderSceneLibrary();
 });
 
 // ==========================================================================
@@ -1865,6 +1873,7 @@ async function handleSeparateMode(targetIndex = null) {
     if (!es || es.insertType === INSERT_TYPE.DISABLED || !es.promptInjection?.regex) return;
     const context = getContext();
     const mesIdx = Number.isInteger(targetIndex) ? targetIndex : context.chat.length - 1;
+    const sceneChat = sceneChatId();
     const message = context.chat[mesIdx];
     if (!message || !(message.mes || '').trim()) return;
 
@@ -1901,8 +1910,10 @@ async function handleSeparateMode(targetIndex = null) {
             for await (const chunk of generator) if (chunk?.text !== undefined) raw = chunk.text;
         } else if (response && typeof response === 'object') raw = response.content || response.text || String(response);
         else raw = String(response || '');
+        raw = harvestSceneLibrary(raw, sceneChat).text;
         const plan = parseSeparatePromptPlan(raw, slots);
         if (!plan.length) { toastr.warning('Separate mode: the planner returned no valid slot prompts'); return; }
+        recordSceneLibraryPrompts(plan.map(item => item.prompt), sceneChat);
 
         const generated = new Map();
         if (!message.extra || typeof message.extra !== 'object') message.extra = {};
@@ -1959,6 +1970,7 @@ async function handleManualRescan() {
     const count = parseInt($('#ikarus_manual_rescan_count').val()) || 1;
     const context = getContext();
     const isSeparateMode = es.generationMode === 'separate';
+    const rescanChat = sceneChatId();
 
     // Collect last N AI messages from chat
     const aiMessages = [];
@@ -2066,6 +2078,14 @@ ${userPrompt}`, 'Manual rescan',
                 }
             }
 
+            const sceneHarvest = harvestSceneLibrary(message.mes, rescanChat);
+            if (sceneHarvest.text !== message.mes) {
+                message.mes = sceneHarvest.text;
+                if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = sceneHarvest.text;
+                updateMessageBlock(mesIdx, message);
+                await context.saveChat();
+            }
+
             // Extract matches to process in Pass 2
             const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
             if (matches.length > 0) {
@@ -2083,6 +2103,8 @@ ${userPrompt}`, 'Manual rescan',
             toastr.info('Manual rescan complete: no image prompts found.');
             return;
         }
+
+        recordSceneLibraryPrompts(generationsQueue.flatMap(q => q.matches.map(m => m.prompt)), rescanChat);
 
         // --- Pass 2: Image generation pass ---
         let totalImages = 0;
@@ -2189,8 +2211,18 @@ async function handleIncomingMessage() {
         }
     }
 
+    // Scene/character library: strip the block from the visible reply and store new entries.
+    const sceneHarvest = harvestSceneLibrary(message.mes);
+    if (sceneHarvest.text !== message.mes) {
+        message.mes = sceneHarvest.text;
+        if (Array.isArray(message.swipes) && Number.isInteger(message.swipe_id)) message.swipes[message.swipe_id] = sceneHarvest.text;
+        updateMessageBlock(context.chat.length - 1, message);
+        await context.saveChat();
+    }
+
     const matches = getImagePromptMatches(message.mes, es.promptInjection.regex);
     if (!matches.length) return;
+    recordSceneLibraryPrompts(matches.map(m => m.prompt));
 
     const mesIdx = context.chat.length - 1;
 
@@ -2493,7 +2525,7 @@ async function runStandaloneGeneration(request='',auto=false,targetIndex=null){
     if(_standaloneBusy) return; createStandaloneWindow(); _standaloneBusy=true; _standaloneCancelled=false;
     $('#ikarus_standalone_send').prop('disabled',true); $('#ikarus_standalone_stop').prop('disabled',false); $('#ikarus_standalone_status').text('Planning'); $('#ikarus_standalone_progress').text('Reading story context...');
     try{
-        const raw=await requestStandalonePrompts(request,auto,targetIndex); if(_standaloneCancelled) return;
+        const sceneChat=sceneChatId(); const raw=harvestSceneLibrary(await requestStandalonePrompts(request,auto,targetIndex),sceneChat).text; if(_standaloneCancelled) return;
         let matches=getImagePromptMatches(normalizePicPrompts(raw||''),s().promptInjection.regex);
         if(!matches.length) throw new Error('The assistant returned no [pic prompt] entries.');
         // Hard runtime limit: never generate more than the current Standalone setting,
@@ -2501,6 +2533,7 @@ async function runStandaloneGeneration(request='',auto=false,targetIndex=null){
         const imageLimit = Math.max(1, Math.min(30, Number(s().standalone.imageCount) || 1));
         const returnedCount = matches.length;
         matches = matches.slice(0, imageLimit);
+        recordSceneLibraryPrompts(matches.map(m => m.prompt), sceneChat);
         if (returnedCount > imageLimit) console.log(`[${EXT}] Standalone: limited ${returnedCount} returned prompts to ${imageLimit}`);
         appendStandaloneChat('assistant', `Prepared ${matches.length} image prompt${matches.length===1?'':'s'}${returnedCount > imageLimit ? ` (limited from ${returnedCount})` : ''}. Generation has started.`);
         $('#ikarus_standalone_progress').text(`Found ${matches.length} prompts. Generating 0 / ${matches.length}`);
@@ -2518,6 +2551,157 @@ async function runStandaloneGeneration(request='',auto=false,targetIndex=null){
     finally{_standaloneBusy=false;_standaloneGenerator=null;$('#ikarus_standalone_send').prop('disabled',false);$('#ikarus_standalone_stop').prop('disabled',true);$('#ikarus_standalone_status').text(_standaloneCancelled?'Stopped':'Ready');}
 }
 function stopStandaloneGeneration(){_standaloneCancelled=true;try{_standaloneGenerator?.return?.();}catch{} $('#ikarus_standalone_status').text('Stopping');}
+
+// ==========================================================================
+// Scene/Character Library (per chat, stored in chat metadata)
+// ==========================================================================
+// The code, not the AI, decides whether a library exists. The AI can only ADD entries
+// with new names through a <scene_library> block in output it already produces.
+const SCENE_META_KEY = 'ikarus_scene_library';
+const SCENE_TYPES = ['location', 'character', 'outfit', 'object'];
+const SCENE_TYPE_ALIASES = { place: 'location', setting: 'location', room: 'location', area: 'location', person: 'character', npc: 'character', char: 'character', creature: 'character', clothing: 'outfit', clothes: 'outfit', costume: 'outfit', armor: 'outfit', armour: 'outfit', item: 'object', prop: 'object', weapon: 'object', vehicle: 'object' };
+const SCENE_MAX_NEW_PER_TURN = 12;
+const SCENE_BLOCK_REGEX = /(?:```[a-z]*[ \t]*\n?)?<scene_library>([\s\S]*?)<\/scene_library>(?:[ \t]*\n?```)?/gi;
+
+function sceneLibraryEnabled() { return s().sceneLibrary?.enabled === true; }
+function sceneKey(name) { return String(name || '').toLowerCase().replace(/[\s_\-]+/g, ' ').replace(/^[\s"'`*]+|[\s"'`*]+$/g, '').trim(); }
+function sceneChatId() {
+    try { const c = getContext(); return String(c.getCurrentChatId?.() || c.chatId || ''); } catch { return ''; }
+}
+function sceneLibraryData(create = false) {
+    if (!sceneChatId()) return null;
+    const meta = getContext().chatMetadata;
+    if (!meta || typeof meta !== 'object') return null;
+    let lib = meta[SCENE_META_KEY];
+    if (!lib || typeof lib !== 'object') {
+        if (!create) return null;
+        lib = meta[SCENE_META_KEY] = { entries: [], lastPrompts: [], manual: false };
+    }
+    if (!Array.isArray(lib.entries)) lib.entries = [];
+    if (!Array.isArray(lib.lastPrompts)) lib.lastPrompts = [];
+    lib.manual = lib.manual === true;
+    return lib;
+}
+function saveSceneLibrary() {
+    try {
+        const c = getContext();
+        const save = c.saveMetadataDebounced || c.saveMetadata;
+        if (typeof save === 'function') save();
+    } catch (e) { console.warn(`[${EXT}] Scene library save failed:`, e); }
+}
+
+function parseSceneLibraryLines(body) {
+    const out = [];
+    for (let line of String(body || '').split(/\r?\n/)) {
+        line = line.trim().replace(/^(?:[-*\u2022]\s*|\d+[.)]\s+)/, '');
+        const parts = line.split('|').map(x => x.trim());
+        if (parts.length < 3) continue;
+        let type = parts[0].toLowerCase().replace(/[\[\]()]/g, '').trim();
+        type = SCENE_TYPE_ALIASES[type] || type;
+        if (!SCENE_TYPES.includes(type)) continue;
+        const name = parts[1].replace(/^["'`*]+|["'`*]+$/g, '').trim().slice(0, 80);
+        const description = parts.slice(2).join(' | ').trim().slice(0, 500);
+        if (name && description) out.push({ type, name, description });
+    }
+    return out;
+}
+
+// Add-only merge: entries whose normalized name already exists are skipped, never modified.
+function mergeSceneLibraryEntries(existing, candidates, limit = SCENE_MAX_NEW_PER_TURN) {
+    const keys = new Set((existing || []).map(e => sceneKey(e?.name)).filter(Boolean));
+    const added = [];
+    for (const c of candidates || []) {
+        if (added.length >= limit) break;
+        const k = sceneKey(c.name);
+        if (!k || keys.has(k)) continue;
+        keys.add(k);
+        added.push({ id: uid(), type: c.type, name: c.name, description: c.description, source: 'ai', createdAt: new Date().toISOString() });
+    }
+    return added;
+}
+
+// Removes <scene_library> blocks from AI output. New entries are stored only when the feature
+// is on, the chat library is not manual, and the chat has not changed since the request started.
+function harvestSceneLibrary(text, expectedChatId = null) {
+    const raw = String(text ?? '');
+    if (!sceneLibraryEnabled()) return { text: raw, added: 0 };
+    const bodies = [];
+    const stripped = raw.replace(SCENE_BLOCK_REGEX, (_m, body) => { bodies.push(body); return ''; });
+    if (!bodies.length) return { text: raw, added: 0 };
+    let added = 0;
+    if (expectedChatId === null || expectedChatId === sceneChatId()) {
+        const lib = sceneLibraryData(true);
+        if (lib && !lib.manual) {
+            const fresh = mergeSceneLibraryEntries(lib.entries, bodies.flatMap(parseSceneLibraryLines));
+            if (fresh.length) { lib.entries.push(...fresh); added = fresh.length; saveSceneLibrary(); renderSceneLibrary(); }
+        }
+    }
+    if (added) console.log(`[${EXT}] Scene library: added ${added} entr${added === 1 ? 'y' : 'ies'}`);
+    return { text: stripped.replace(/\n{3,}/g, '\n\n').trim(), added };
+}
+
+// Stores the raw prompts caught by the regex for this turn (what the AI sent to the code).
+function recordSceneLibraryPrompts(prompts, expectedChatId = null) {
+    if (!sceneLibraryEnabled()) return;
+    if (expectedChatId !== null && expectedChatId !== sceneChatId()) return;
+    const list = (prompts || []).map(p => String(p || '').trim()).filter(Boolean).slice(0, 30);
+    if (!list.length) return;
+    const lib = sceneLibraryData(true);
+    if (!lib) return;
+    lib.lastPrompts = list;
+    saveSceneLibrary();
+    renderSceneLibraryPrompts();
+}
+
+function buildSceneLibraryPrompt(lib) {
+    const entries = (lib?.entries || []).filter(e => String(e?.name || '').trim());
+    const manual = lib?.manual === true;
+    const prompts = (lib?.lastPrompts || []).filter(Boolean);
+    const sections = [];
+    if (entries.length) {
+        sections.push(`Established visual references for this chat. Whenever one of these appears in an image prompt, reuse its details and wording so it stays consistent between images:\n${entries.map(e => `${e.type} | ${String(e.name).trim()} | ${String(e.description || '').trim()}`).join('\n')}`);
+    }
+    if (manual) {
+        if (entries.length) sections.push('This library is maintained by the user. Do not output a <scene_library> block.');
+    } else {
+        const format = '<scene_library>\nType | Name | Concise visual description\n</scene_library>';
+        const rules = 'Types: location, character, outfit, object. One entry per line. Use a distinct, specific name (e.g. "Spaceship X bedroom", "Temple after flood", "Juvia_waterform"). Descriptions are short comma-separated visual details worth repeating: layout, colors, furniture and fixed objects for locations; hair, eyes, body, skin and signature features for characters; cut, colors and materials for outfits. Place the block immediately before your image prompt output (before the JSON array if JSON is requested). It is the only exception to any output-format rule and is removed automatically before the user sees it.';
+        if (!entries.length) sections.push(`This chat has no scene/character library yet. Create it now with every recurring named location, character, outfit or object in your image prompts:\n${format}\n${rules}`);
+        else sections.push(`You may ADD entries only for recurring locations, characters, outfits or objects not listed above. Never repeat, rename or modify existing entries. If nothing new appears, do not output the block. Format:\n${format}\n${rules}`);
+    }
+    if (prompts.length) sections.push(`Your image prompts from the previous turn, for continuity of wording and details (depict the current moment, do not copy them blindly):\n${prompts.map((p, i) => `${i + 1}. ${p}`).join('\n')}`);
+    return sections.length ? `<scene_character_library>\n${sections.join('\n\n')}\n</scene_character_library>` : '';
+}
+
+function getSceneLibraryPromptText() {
+    if (!sceneLibraryEnabled() || !sceneChatId()) return '';
+    return buildSceneLibraryPrompt(sceneLibraryData(false));
+}
+
+function renderSceneLibraryPrompts() {
+    $('#ikarus_scene_last_prompts').val((sceneLibraryData(false)?.lastPrompts || []).map((p, i) => `${i + 1}. ${p}`).join('\n'));
+}
+
+function renderSceneLibrary() {
+    const body = $('#ikarus_scene_body');
+    if (!body.length) return;
+    const enabled = sceneLibraryEnabled();
+    $('#ikarus_scene_enabled').prop('checked', enabled);
+    body.toggle(enabled);
+    if (!enabled) return;
+    const hasChat = !!sceneChatId();
+    const lib = sceneLibraryData(false);
+    const entries = lib?.entries || [];
+    $('#ikarus_scene_manual').prop('checked', lib?.manual === true).prop('disabled', !hasChat);
+    $('#ikarus_scene_add, #ikarus_scene_clear, #ikarus_scene_clear_prompts').prop('disabled', !hasChat);
+    let status;
+    if (!hasChat) status = 'Open a chat to use its library.';
+    else if (entries.length) status = `${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}. ${lib.manual ? 'Locked: manual mode, the AI cannot add entries.' : 'The AI may add entries with new names.'}`;
+    else status = lib?.manual ? 'Empty. Manual mode: add entries yourself.' : 'Empty. The AI will be asked to create the first library with its next image prompt.';
+    $('#ikarus_scene_status').text(status);
+    $('#ikarus_scene_list').html(entries.map(e => `<div class="ikarus-scene-entry" data-id="${esc(e.id)}"><div class="ikarus-scene-entry-head"><select class="text_pole ikarus-scene-type">${SCENE_TYPES.map(t => `<option value="${t}" ${e.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select><input class="text_pole ikarus-scene-name" value="${esc(e.name)}" placeholder="Name"><span class="ikarus-scene-source" title="Added by">${e.source === 'user' ? 'user' : 'AI'}</span><button class="menu_button ikarus-scene-delete" type="button" title="Delete entry">&times;</button></div><textarea class="text_pole textarea_compact ikarus-scene-desc" rows="2" placeholder="Concise visual description">${esc(e.description)}</textarea></div>`).join(''));
+    renderSceneLibraryPrompts();
+}
 
 // ==========================================================================
 // Prompt tester and per-message generation
@@ -3151,6 +3335,37 @@ async function createSettings(html) {
 
     // Character Prefix (per-card)
     $('#ikarus_char_prefix').on('input', function () { saveCharPrefix(); });
+
+    // Scene/Character Library
+    $('#ikarus_scene_enabled').on('change', function () { s().sceneLibrary.enabled = $(this).prop('checked'); saveSettingsDebounced(); renderSceneLibrary(); syncPromptInjection(); });
+    $('#ikarus_scene_manual').on('change', function () { const lib = sceneLibraryData(true); if (!lib) return; lib.manual = $(this).prop('checked'); saveSceneLibrary(); renderSceneLibrary(); syncPromptInjection(); });
+    $('#ikarus_scene_add').on('click', function () {
+        const lib = sceneLibraryData(true); if (!lib) return;
+        lib.entries.push({ id: uid(), type: 'location', name: '', description: '', source: 'user', createdAt: new Date().toISOString() });
+        saveSceneLibrary(); renderSceneLibrary();
+        $('#ikarus_scene_list .ikarus-scene-name').last().trigger('focus');
+    });
+    $('#ikarus_scene_clear').on('click', function () {
+        const lib = sceneLibraryData(false); if (!lib?.entries.length) return;
+        if (!confirm(`Clear all ${lib.entries.length} entries of this chat's library?`)) return;
+        lib.entries = []; saveSceneLibrary(); renderSceneLibrary(); syncPromptInjection();
+    });
+    $('#ikarus_scene_clear_prompts').on('click', function () { const lib = sceneLibraryData(false); if (!lib) return; lib.lastPrompts = []; saveSceneLibrary(); renderSceneLibraryPrompts(); syncPromptInjection(); });
+    $('#ikarus_scene_list').on('input change', '.ikarus-scene-type, .ikarus-scene-name, .ikarus-scene-desc', function () {
+        const row = $(this).closest('.ikarus-scene-entry');
+        const entry = sceneLibraryData(false)?.entries.find(x => x.id === row.attr('data-id'));
+        if (!entry) return;
+        entry.type = String(row.find('.ikarus-scene-type').val() || 'location');
+        entry.name = String(row.find('.ikarus-scene-name').val() || '');
+        entry.description = String(row.find('.ikarus-scene-desc').val() || '');
+        saveSceneLibrary();
+    });
+    $('#ikarus_scene_list').on('click', '.ikarus-scene-delete', function () {
+        const lib = sceneLibraryData(false); if (!lib) return;
+        const id = $(this).closest('.ikarus-scene-entry').attr('data-id');
+        lib.entries = lib.entries.filter(x => x.id !== id);
+        saveSceneLibrary(); renderSceneLibrary(); syncPromptInjection();
+    });
 
     // Section 3: Replacements
     // Render the mandatory first trigger row before any replacement can be saved.

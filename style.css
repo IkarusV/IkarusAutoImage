@@ -714,3 +714,12 @@
 .ikarus-ai-field{display:grid;grid-template-columns:70px 1fr;gap:2px 8px;margin-top:4px;font-size:12px}.ikarus-ai-field span{grid-row:span 2;opacity:.7}
 .ikarus-ai-field del{color:#e57373;opacity:.8}.ikarus-ai-field ins{color:#81c784;text-decoration:none}
 .ikarus-ai-ignored{margin-top:6px;font-size:12px;opacity:.75}.ikarus-ai-ignored div{margin-left:8px}
+
+/* Scene/Character Library */
+.ikarus-scene-list{display:flex;flex-direction:column;gap:6px;margin:6px 0;max-height:360px;overflow-y:auto}
+.ikarus-scene-entry{border:1px solid rgba(255,255,255,.08);border-radius:6px;padding:6px;background:rgba(0,0,0,.15)}
+.ikarus-scene-entry-head{display:flex;gap:4px;align-items:center;margin-bottom:4px}
+.ikarus-scene-type{flex:0 0 105px;margin:0}.ikarus-scene-name{flex:1;min-width:0;margin:0}
+.ikarus-scene-source{font-size:11px;opacity:.6;min-width:22px;text-align:center}
+.ikarus-scene-delete{margin:0;padding:2px 8px}
+.ikarus-scene-actions{display:flex;gap:6px;margin-bottom:6px}

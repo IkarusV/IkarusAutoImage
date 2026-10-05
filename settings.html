@@ -152,6 +152,22 @@
             <textarea id="ikarus_char_prefix" class="text_pole textarea_compact" rows="2" placeholder="Select a character first..."></textarea>
         </div>
 
+        <!-- ===== Scene/Character Library (per chat) ===== -->
+        <div class="ikarus-section">
+            <div class="ikarus-section-title"><span class="icon"></span> Scene/Character Library</div>
+            <label class="ikarus-toggle"><input type="checkbox" id="ikarus_scene_enabled"><span>Enable scene/character library</span></label>
+            <div class="ikarus-hint" style="margin-bottom:6px;">Per-chat notebook of recurring locations, characters, outfits and objects, plus the image prompts caught in the last turn. Sent with the image prompt in Together, Separate and Standalone mode without extra API calls. The AI can only add entries with new names. Place <code>{SceneCharacterLibrary}</code> in the prompt to choose its position; otherwise it is appended. When disabled, nothing is injected.</div>
+            <div id="ikarus_scene_body" style="display:none;">
+                <label class="ikarus-toggle"><input type="checkbox" id="ikarus_scene_manual"><span>Manual scene/character library (AI cannot add entries)</span></label>
+                <div id="ikarus_scene_status" class="ikarus-hint"></div>
+                <div id="ikarus_scene_list" class="ikarus-scene-list"></div>
+                <div class="ikarus-scene-actions"><button id="ikarus_scene_add" class="menu_button" type="button">Add entry</button><button id="ikarus_scene_clear" class="menu_button" type="button">Clear library</button></div>
+                <label for="ikarus_scene_last_prompts">Last turn image prompts (sent to the AI)</label>
+                <textarea id="ikarus_scene_last_prompts" class="text_pole textarea_compact" rows="3" readonly></textarea>
+                <button id="ikarus_scene_clear_prompts" class="menu_button" type="button">Clear last prompts</button>
+            </div>
+        </div>
+
         <!-- ===== Section 3: Replacements ===== -->
         <div class="ikarus-section">
             <div class="ikarus-section-title"><span class="icon"></span> Replacements</div>
