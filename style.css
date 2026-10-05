@@ -723,3 +723,11 @@
 .ikarus-scene-source{font-size:11px;opacity:.6;min-width:22px;text-align:center}
 .ikarus-scene-delete{margin:0;padding:2px 8px}
 .ikarus-scene-actions{display:flex;gap:6px;margin-bottom:6px}
+
+/* Detached viewer zoom: click to zoom, drag to pan, click again to reset. */
+#ikarus_image_viewer .ikarus-viewer-stage{overflow:hidden}
+#ikarus_image_viewer .ikarus-viewer-stage img{cursor:zoom-in;transform-origin:0 0;user-select:none;-webkit-user-drag:none;touch-action:none}
+#ikarus_image_viewer.ikarus-viewer-zoomed .ikarus-viewer-stage img{cursor:grab}
+#ikarus_image_viewer.ikarus-viewer-zoomed.ikarus-viewer-panning .ikarus-viewer-stage img{cursor:grabbing}
+/* Hidden-detail viewer: a thicker frame around the image so the window can always be grabbed, even when the image fills the stage. */
+#ikarus_image_viewer.details-hidden .ikarus-viewer-stage{box-sizing:border-box;border:14px solid #1a120d}

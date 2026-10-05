@@ -2351,7 +2351,7 @@ function createStandaloneWindow() {
     $('#ikarus_image_viewer').on('pointerdown', '#ikarus_viewer_header, .ikarus-viewer-stage', function (e) {
         const viewer = $('#ikarus_image_viewer');
         const fromStage = $(this).hasClass('ikarus-viewer-stage');
-        if ($(e.target).is('button') || (fromStage && !viewer.hasClass('details-hidden'))) return;
+        if ($(e.target).is('button, img') || (fromStage && !viewer.hasClass('details-hidden'))) return;
         const r = viewer[0].getBoundingClientRect();
         viewerDrag = { x: e.clientX - r.left, y: e.clientY - r.top };
         this.setPointerCapture(e.pointerId);
@@ -2377,6 +2377,35 @@ function createStandaloneWindow() {
         $('#ikarus_image_viewer').css({ width: Math.max(500, viewerResize.w + e.clientX - viewerResize.x), height: Math.max(400, viewerResize.h + e.clientY - viewerResize.y) });
     });
     $('#ikarus_image_viewer').on('pointerup pointercancel', '.ikarus-viewer-resize', () => viewerResize = null);
+    // Image zoom: click the image to zoom at that point, drag to pan while zoomed, click again to zoom out.
+    let viewerZoomPointer = null;
+    $('#ikarus_image_viewer').on('pointerdown', '.ikarus-viewer-stage img', function (e) {
+        if (e.button !== 0) return;
+        viewerZoomPointer = { x: e.clientX, y: e.clientY, tx: _viewerZoom.x, ty: _viewerZoom.y, moved: false };
+        this.setPointerCapture(e.pointerId);
+        e.preventDefault(); e.stopPropagation();
+    });
+    $('#ikarus_image_viewer').on('pointermove', '.ikarus-viewer-stage img', function (e) {
+        if (!viewerZoomPointer) return;
+        const dx = e.clientX - viewerZoomPointer.x, dy = e.clientY - viewerZoomPointer.y;
+        if (Math.abs(dx) + Math.abs(dy) > 4) viewerZoomPointer.moved = true;
+        if (!viewerZoomPointer.moved || _viewerZoom.scale <= 1) return;
+        _viewerZoom.x = viewerZoomPointer.tx + dx; _viewerZoom.y = viewerZoomPointer.ty + dy;
+        applyViewerZoom($(this));
+        $('#ikarus_image_viewer').addClass('ikarus-viewer-panning');
+    });
+    $('#ikarus_image_viewer').on('pointerup pointercancel', '.ikarus-viewer-stage img', function (e) {
+        const p = viewerZoomPointer; viewerZoomPointer = null;
+        $('#ikarus_image_viewer').removeClass('ikarus-viewer-panning');
+        if (!p || p.moved || e.type === 'pointercancel') return;
+        if (_viewerZoom.scale > 1) { resetViewerZoom(); return; }
+        const r = this.getBoundingClientRect();
+        const px = e.clientX - r.left, py = e.clientY - r.top;
+        _viewerZoom.scale = VIEWER_ZOOM_SCALE;
+        _viewerZoom.x = px * (1 - VIEWER_ZOOM_SCALE); _viewerZoom.y = py * (1 - VIEWER_ZOOM_SCALE);
+        applyViewerZoom($(this));
+    });
+    $('#ikarus_image_viewer .ikarus-viewer-stage img').attr('draggable', 'false');
     $('#ikarus_image_viewer .ikarus-viewer-prev').on('click', () => stepStandaloneViewer(-1));
     $('#ikarus_image_viewer .ikarus-viewer-next').on('click', () => stepStandaloneViewer(1));
     $('#ikarus_image_viewer .ikarus-viewer-slideshow').on('click', toggleStandaloneSlideshow);
@@ -2397,6 +2426,22 @@ function renderStandaloneChat(){
     const el=$('#ikarus_standalone_chatlog')[0];if(el)el.scrollTop=el.scrollHeight;
 }
 let _standaloneViewerIndex=0;
+const VIEWER_ZOOM_SCALE = 2.5;
+const _viewerZoom = { scale: 1, x: 0, y: 0 };
+// Keeps the zoomed image covering its own box so panning never reveals empty space.
+function applyViewerZoom(img = $('#ikarus_image_viewer .ikarus-viewer-stage img')) {
+    const el = img[0]; if (!el) return;
+    const z = _viewerZoom.scale;
+    if (z <= 1) { _viewerZoom.x = 0; _viewerZoom.y = 0; }
+    else {
+        const w = el.offsetWidth, h = el.offsetHeight;
+        _viewerZoom.x = Math.min(0, Math.max(w * (1 - z), _viewerZoom.x));
+        _viewerZoom.y = Math.min(0, Math.max(h * (1 - z), _viewerZoom.y));
+    }
+    img.css('transform', z > 1 ? 'translate(' + _viewerZoom.x + 'px, ' + _viewerZoom.y + 'px) scale(' + z + ')' : '');
+    $('#ikarus_image_viewer').toggleClass('ikarus-viewer-zoomed', z > 1);
+}
+function resetViewerZoom() { _viewerZoom.scale = 1; applyViewerZoom(); }
 let _standaloneSlideshowTimer=null;
 function renderStandaloneGallery() {
     if (!$('#ikarus_standalone_window').length) return;
@@ -2418,6 +2463,7 @@ function refreshStandaloneViewerState() {
     if (!images.length) { closeStandaloneViewer(); return; }
     _standaloneViewerIndex = Math.max(0, Math.min(_standaloneViewerIndex, images.length - 1));
     const item = images[_standaloneViewerIndex];
+    if (viewer.find('img').attr('src') !== item.url) resetViewerZoom();
     viewer.find('img').attr('src', item.url);
     viewer.find('textarea').val(item.prompt || 'Prompt not stored for this older gallery item.');
     viewer.find('.ikarus-viewer-meta').html(`<b>Image ${_standaloneViewerIndex + 1} of ${images.length}</b><span>Created: ${esc(item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Unknown')}</span><span>Chat library: ${esc(standaloneChatKey())}</span>`);
@@ -2434,7 +2480,7 @@ function stopStandaloneSlideshow(){
     if(_standaloneSlideshowTimer){clearTimeout(_standaloneSlideshowTimer);_standaloneSlideshowTimer=null;}
     $('#ikarus_image_viewer .ikarus-viewer-slideshow').removeClass('playing waiting').html('&#9654;').attr('title','Play slideshow');
 }
-function closeStandaloneViewer(){stopStandaloneSlideshow();$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
+function closeStandaloneViewer(){stopStandaloneSlideshow();resetViewerZoom();$('#ikarus_image_viewer').addClass('closed').find('img').attr('src','');}
 function stepStandaloneViewer(delta){
     const images=standaloneLibrary().images||[];if(!images.length)return false;
     const next=_standaloneViewerIndex+delta;
