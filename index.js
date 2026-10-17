@@ -1523,6 +1523,27 @@ function handleGlobalSdPromptProcessing(eventData) {
     }
 }
 
+// SillyTavern restores the width/height it had when a generation started, so a resolution change made
+// while an image is generating is reverted in settings even though the sliders show the new value.
+// Re-sync from the visible sliders before and after every extension generation.
+function syncSdDimensionsFromUi() {
+    const sd = extension_settings.sd;
+    if (!sd || typeof sd !== 'object') return;
+    let changed = false;
+    for (const key of ['width', 'height']) {
+        const value = Number(document.getElementById(`sd_${key}`)?.value);
+        if (Number.isFinite(value) && value > 0 && sd[key] !== value) { sd[key] = value; changed = true; }
+    }
+    if (changed) saveSettingsDebounced();
+}
+async function ikarusSdGenerate(args, prompt) {
+    const sd = SlashCommandParser.commands?.['sd'];
+    if (!sd?.callback) throw new Error('/sd image generation is unavailable');
+    syncSdDimensionsFromUi();
+    try { return await sd.callback(args, prompt); }
+    finally { syncSdDimensionsFromUi(); }
+}
+
 const IKARUS_IMAGINE_WRAPPED = Symbol.for('IkarusAutoImage.imagineWrapped');
 
 function wrapImagineCommand() {
@@ -1925,7 +1946,7 @@ async function handleSeparateMode(targetIndex = null) {
             if (!prompt) continue;
             markProcessedSdPrompt(prompt);
             try {
-                const url = await sd.callback({ quiet: 'true', gallery: 'false' }, prompt);
+                const url = await ikarusSdGenerate({ quiet: 'true', gallery: 'false' }, prompt);
                 if (typeof url === 'string' && url.trim()) generated.set(item.slot, { url: url.trim(), prompt });
             } catch (imageError) {
                 console.error(`[${EXT}] Separate slot ${item.slot} generation failed:`, imageError);
@@ -2123,7 +2144,7 @@ ${userPrompt}`, 'Manual rescan',
                 imgPrompt = processed.prompt;
                 markProcessedSdPrompt(imgPrompt);
 
-                const sdResult = await SlashCommandParser.commands['sd'].callback(
+                const sdResult = await ikarusSdGenerate(
                     { quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
 
                 if (insertType === INSERT_TYPE.INLINE && typeof sdResult === 'string' && sdResult.trim()) {
@@ -2242,7 +2263,7 @@ async function handleIncomingMessage() {
                 imgPrompt = processed.prompt;
                 markProcessedSdPrompt(imgPrompt);
 
-                const result = await SlashCommandParser.commands['sd'].callback(
+                const result = await ikarusSdGenerate(
                     { quiet: es.insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, imgPrompt);
 
                 if (es.insertType === INSERT_TYPE.INLINE && typeof result === 'string' && result.trim()) {
@@ -2588,7 +2609,7 @@ async function runStandaloneGeneration(request='',auto=false,targetIndex=null){
             if(_standaloneCancelled) break;
             const prompt=processPrompt(matches[i].prompt,'').prompt; markProcessedSdPrompt(prompt);
             $('#ikarus_standalone_status').text(`Generating ${i+1}/${matches.length}`);
-            const url=await SlashCommandParser.commands['sd'].callback({quiet:'true'},prompt);
+            const url=await ikarusSdGenerate({quiet:'true'},prompt);
             if(typeof url==='string'&&url.trim()){lib.images.push({id:uid(),url:url.trim(),prompt,createdAt:new Date().toISOString()});saveSettingsDebounced();renderStandaloneGallery();if(i===0)$('.ikarus-standalone-tabs button[data-tab="gallery"]').trigger('click');}
             $('#ikarus_standalone_progress').text(`Generated ${i+1} / ${matches.length}`);
         }
@@ -2765,7 +2786,7 @@ async function generatePromptTesterImage() {
     const prompt=$('#ikarus_test_prompt_output').val()?.trim()||'';
     if(!prompt){ikarusNotify('warning','Enter a test prompt first');return;}
     const button=$('#ikarus_test_generate_image').prop('disabled',true).text('Generating...');
-    try{const sd=SlashCommandParser.commands?.['sd'];if(!sd?.callback)throw new Error('/sd image generation is unavailable');markProcessedSdPrompt(prompt);const url=await sd.callback({quiet:'true',gallery:'false'},prompt);if(typeof url!=='string'||!url.trim())throw new Error('No image URL was returned');$('#ikarus_test_image_result').empty().append($('<img>',{src:url.trim(),alt:'Prompt tester result'}));}
+    try{const sd=SlashCommandParser.commands?.['sd'];if(!sd?.callback)throw new Error('/sd image generation is unavailable');markProcessedSdPrompt(prompt);const url=await ikarusSdGenerate({quiet:'true',gallery:'false'},prompt);if(typeof url!=='string'||!url.trim())throw new Error('No image URL was returned');$('#ikarus_test_image_result').empty().append($('<img>',{src:url.trim(),alt:'Prompt tester result'}));}
     catch(error){ikarusNotify('error',`Test image: ${error.message||error}`);}
     finally{button.prop('disabled',false).text('Generate test image');}
 }
