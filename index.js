@@ -60,7 +60,7 @@ const DEFAULT_SETTINGS = {
     loraCleaner: true, // removes duplicate A1111 <lora:name:weight> entries
     hideToasts: false,
     aiEditor: { profile: '', mode: 'all', webSearch: false, ultimateControl: true }, // AI character replacement editor
-    sceneLibrary: { enabled: false }, // per-chat scene/character library; entries live in chat metadata
+    sceneLibrary: { enabled: false }, // legacy global switch; the on/off state and entries now live in each chat's metadata
     autoClean: false,
     autoFixPicFormat: false, // when true, normalizes malformed pic prompts to [pic prompt="..."] before extraction
     filterNativeSd: true, // when true, runs the prompt pipeline on all native /sd prompts before generation
@@ -2630,7 +2630,15 @@ const SCENE_TYPE_ALIASES = { place: 'location', setting: 'location', room: 'loca
 const SCENE_MAX_NEW_PER_TURN = 12;
 const SCENE_BLOCK_REGEX = /(?:```[a-z]*[ \t]*\n?)?<scene_library>([\s\S]*?)<\/scene_library>(?:[ \t]*\n?```)?/gi;
 
-function sceneLibraryEnabled() { return s().sceneLibrary?.enabled === true; }
+// On/off is stored per chat. Chats created before this setting existed follow the old global switch
+// only if they already have a library; new chats start disabled.
+function sceneLibraryEnabled() {
+    if (!sceneChatId()) return false;
+    const lib = getContext().chatMetadata?.[SCENE_META_KEY];
+    if (!lib || typeof lib !== 'object') return false;
+    if (typeof lib.enabled === 'boolean') return lib.enabled;
+    return s().sceneLibrary?.enabled === true;
+}
 function sceneKey(name) { return String(name || '').toLowerCase().replace(/[\s_\-]+/g, ' ').replace(/^[\s"'`*]+|[\s"'`*]+$/g, '').trim(); }
 function sceneChatId() {
     try { const c = getContext(); return String(c.getCurrentChatId?.() || c.chatId || ''); } catch { return ''; }
@@ -2753,7 +2761,7 @@ function renderSceneLibrary() {
     const body = $('#ikarus_scene_body');
     if (!body.length) return;
     const enabled = sceneLibraryEnabled();
-    $('#ikarus_scene_enabled').prop('checked', enabled);
+    $('#ikarus_scene_enabled').prop('checked', enabled).prop('disabled', !sceneChatId());
     body.toggle(enabled);
     if (!enabled) return;
     const hasChat = !!sceneChatId();
@@ -3404,7 +3412,12 @@ async function createSettings(html) {
     $('#ikarus_char_prefix').on('input', function () { saveCharPrefix(); });
 
     // Scene/Character Library
-    $('#ikarus_scene_enabled').on('change', function () { s().sceneLibrary.enabled = $(this).prop('checked'); saveSettingsDebounced(); renderSceneLibrary(); syncPromptInjection(); });
+    $('#ikarus_scene_enabled').on('change', function () {
+        const lib = sceneLibraryData(true);
+        if (!lib) { $(this).prop('checked', false); return; }
+        lib.enabled = $(this).prop('checked');
+        saveSceneLibrary(); renderSceneLibrary(); syncPromptInjection();
+    });
     $('#ikarus_scene_manual').on('change', function () { const lib = sceneLibraryData(true); if (!lib) return; lib.manual = $(this).prop('checked'); saveSceneLibrary(); renderSceneLibrary(); syncPromptInjection(); });
     $('#ikarus_scene_add').on('click', function () {
         const lib = sceneLibraryData(true); if (!lib) return;
