@@ -1246,92 +1246,72 @@ function applyReplacements(text) {
     const all = activeItems(s().replacements || []);
     if (!all.length) return text;
 
-    const parents = all.filter(r => !r.parentId);
-    let result = String(text || '');
-
-    // Phase 1: Process parents, track which ones fired
+    const original = String(text || '');
+    let segments = [{ text: original, protected: false }];
     const firedParents = new Set();
-    // Sort parents by priority (higher first)
-    parents.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-
-    for (const parent of parents) {
-        if (triggerMatches(result, parent)) {
-            firedParents.add(parent.id);
-            result = doReplace(result, parent);
-            console.log(`[${EXT}] Replacement "${parent.name}" [P${parent.priority || 0}] applied`);
-        }
+    const byPriority = (a, b) => (b.priority || 0) - (a.priority || 0);
+    const apply = rule => {
+        const next = replaceOriginalSegments(segments, rule);
+        segments = next.segments;
+        return next.count > 0;
+    };
+    for (const parent of all.filter(r => !r.parentId).sort(byPriority)) {
+        if (triggerMatches(original, parent) && apply(parent)) firedParents.add(parent.id);
     }
-
-    // Phase 2: Process children
-    // Gather all children, sort by priority (higher first)
-    const allChildren = all.filter(r => r.parentId);
-    allChildren.sort((a, b) => (b.priority || 0) - (a.priority || 0));
-
-    // Track which trigger keywords have been claimed (for CHILD mode priority conflict)
     const claimedKeywords = new Set();
-
-    for (const child of allChildren) {
-        const mode = child.matchMode || 'OR';
-
-        if (mode === 'CHILD') {
-            // CHILD mode: only fire if parent fired
-            if (!firedParents.has(child.parentId)) continue;
-            if (!replacementConditionsMatch(result, child)) continue;
-
-            // Check if this child's trigger words conflict with an already-claimed keyword
-            const keywords = child.trigger.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-            const conflicted = keywords.some(kw => claimedKeywords.has(kw));
-            if (conflicted) {
-                // A higher-priority child already claimed this keyword, skip
-                console.log(`[${EXT}] Child "${child.name}" [P${child.priority || 0}] skipped (outprioritized)`);
-                continue;
-            }
-
-            // Check if trigger words are present in the text
-            if (keywords.some(kw => result.toLowerCase().includes(kw))) {
-                result = doReplace(result, child);
-                // Claim these keywords so lower-priority children can't use them
-                keywords.forEach(kw => claimedKeywords.add(kw));
-                console.log(`[${EXT}] Child "${child.name}" [CHILD, P${child.priority || 0}] applied`);
-            }
-        } else {
-            // OR/AND mode: works independently, no parent dependency
-            if (triggerMatches(result, child)) {
-                result = doReplace(result, child);
-                console.log(`[${EXT}] Child "${child.name}" [${mode}, P${child.priority || 0}] applied`);
-            }
+    for (const child of all.filter(r => r.parentId).sort(byPriority)) {
+        if ((child.matchMode || 'OR') === 'CHILD') {
+            if (!firedParents.has(child.parentId) || !replacementConditionsMatch(original, child)) continue;
+            const keywords = String(child.trigger || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+            if (keywords.some(kw => claimedKeywords.has(kw))) continue;
+            if (apply(child)) keywords.forEach(kw => claimedKeywords.add(kw));
+        } else if (triggerMatches(original, child)) {
+            apply(child);
         }
     }
-
-    return result;
+    return cleanPrompt(segments.map(part => part.text).join(''));
 }
 
 function triggerGroupMatches(lower,g){const w=String(g.trigger||'').split(',').map(k=>k.trim().toLowerCase()).filter(Boolean);if(!w.length)return false;const c=w.filter(x=>lower.includes(x)).length;if(g.matchMode==='AND')return c===w.length;if(g.matchMode==='XOR')return c===1;if(g.matchMode==='NOR')return c===0;return c>0;}
 function triggerMatches(text,rule){const lower=String(text||'').toLowerCase();const groups=Array.isArray(rule?.triggerGroups)&&rule.triggerGroups.length?(s().replacements||[]).includes(rule)?normalizeReplacementTriggerGroups(rule):normalizeFilterTriggerGroups(rule):[{trigger:rule?.trigger,matchMode:rule?.matchMode||'OR'}];return groups.every((g,i)=>g.matchMode==='CHILD'&&i===0?true:triggerGroupMatches(lower,g));}
 function replacementConditionsMatch(text,rule){return normalizeReplacementTriggerGroups(rule).slice(1).every(g=>triggerGroupMatches(String(text||'').toLowerCase(),g));}
 
-function doReplace(text, rule) {
-    const keywords = rule.trigger.split(',').map(k => k.trim()).filter(Boolean);
-    // Use tags or caption based on the global toggle
+// Inserted text is stored separately and never searched by another replacement.
+// Match all aliases in one pass so an inserted name cannot match its other spelling.
+function replaceOriginalSegments(segments, rule) {
+    const keywords = [...new Set(String(rule.trigger || '').split(',').map(k => k.trim()).filter(Boolean))];
+    if (!keywords.length) return { segments, count: 0 };
+    keywords.sort((a, b) => b.length - a.length);
+    const regex = new RegExp('\\b(?:' + keywords.map(escRegex).join('|') + ')\\b', 'gi');
     const mode = s().repFieldMode;
-    const activeText = mode === 'caption' ? (rule.caption || rule.replacement || rule.krea2 || '')
+    const activeText = (mode === 'caption' ? (rule.caption || rule.replacement || rule.krea2 || '')
         : mode === 'krea2' ? (rule.krea2 || rule.caption || rule.replacement || '')
-            : (rule.replacement || rule.caption || rule.krea2 || '');
-    let result = text;
-    for (const kw of keywords) {
-        const escaped = escRegex(kw);
-        if (rule.replaceMode === 'first_full') {
-            // First occurrence → full replacement text
-            result = result.replace(new RegExp(`\\b${escaped}\\b`, 'i'), activeText.trim());
-            // Remaining occurrences → short dedupe tag (or just the keyword with disambiguation if no shortTag set)
-            const dedupeText = (rule.shortTag || kw).trim();
-            result = result.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), dedupeText);
-        } else {
-            const flags = rule.replaceMode === 'all' ? 'gi' : 'i';
-            result = result.replace(new RegExp(`\\b${escaped}\\b`, flags), activeText.trim());
+            : (rule.replacement || rule.caption || rule.krea2 || '')).trim();
+    const out = [];
+    let count = 0;
+    for (const part of segments) {
+        if (part.protected || (count && rule.replaceMode !== 'all' && rule.replaceMode !== 'first_full')) {
+            out.push(part); continue;
         }
+        regex.lastIndex = 0;
+        let cursor = 0, match;
+        while ((match = regex.exec(part.text))) {
+            if (match.index > cursor) out.push({ text: part.text.slice(cursor, match.index), protected: false });
+            const replacement = rule.replaceMode === 'first_full' && count > 0
+                ? String(rule.shortTag || match[0]).trim() : activeText;
+            out.push({ text: replacement, protected: true });
+            count++;
+            cursor = regex.lastIndex;
+            if (rule.replaceMode !== 'all' && rule.replaceMode !== 'first_full') break;
+        }
+        if (cursor < part.text.length) out.push({ text: part.text.slice(cursor), protected: false });
     }
-    return cleanPrompt(result);
+    return { segments: out, count };
+}
+
+function doReplace(text, rule) {
+    const result = replaceOriginalSegments([{ text: String(text || ''), protected: false }], rule);
+    return cleanPrompt(result.segments.map(part => part.text).join(''));
 }
 
 // ==========================================================================
@@ -3220,7 +3200,7 @@ Fields:
 - "enabled": false disables a rule.
 Rules:
 - "update" must reference an existing id from the current list. Include only fields you change. Never invent ids.
-- Child triggers and conditions are checked against the prompt after the parent replacement has been applied, so choose condition words that cannot come from the parent's own replacement text.
+- All replacement triggers and conditions are checked against the original prompt. Inserted replacement text is protected and cannot trigger or be rewritten by another replacement. CHILD rules also require their parent to have replaced an original match.
 - Use "create" only for rules the user wants added. Use "remove" only when the user explicitly asks.
 ${fieldRule}`;
 }
