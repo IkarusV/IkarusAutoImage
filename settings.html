@@ -221,6 +221,13 @@
                     <input id="ikarus_rep_short_tag" type="text" class="text_pole" placeholder="e.g. darkness \(konosuba\), she, or any custom text">
                     <div class="ikarus-hint">First match gets the full selected replacement text. Every remaining match gets this text instead.</div>
                 </div>
+                <div class="ikarus-reference-editor">
+                    <label>Reference image (used in Krea2 mode)</label>
+                    <input id="ikarus_rep_reference_file" type="file" accept="image/png,image/jpeg,image/webp">
+                    <div id="ikarus_rep_reference_preview" hidden></div>
+                    <button type="button" id="ikarus_rep_reference_remove" class="menu_button">Remove reference</button>
+                    <div class="ikarus-hint">Saved with this rule. Parent and child rules can each have a reference. Click Update Replacement to save changes.</div>
+                </div>
                 <button id="ikarus_rep_add" class="menu_button" style="width:100%;margin-top:4px;">➕ Add
                     Replacement</button>
             </div>
@@ -315,6 +322,14 @@
                     <option value="krea2">K2 Krea 2</option>
                 </select>
             </div>
+            <div class="ikarus-reference-settings">
+                <label for="ikarus_reference_limit">Reference image limit (0 = unlimited)</label>
+                <input id="ikarus_reference_limit" class="text_pole" type="number" min="0" step="1" value="0">
+                <label for="ikarus_reference_max_side">Reference latent size: <span id="ikarus_reference_max_side_value">1024</span> px (0 = unlimited)</label>
+                <input id="ikarus_reference_max_side" type="range" min="0" max="2048" step="64" value="1024">
+                <div class="ikarus-hint">Krea2 reference conditioning only. Lower sizes reduce reference VRAM. Output width and height stay controlled by SillyTavern.</div>
+            </div>
+
             <div class="ikarus-hint" style="margin-bottom:8px;">Selects which field is used when replacements fire: Tags, Caption, or Krea 2.</div>
 
             <hr style="border-color:rgba(255,255,255,0.05);margin:8px 0;">

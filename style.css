@@ -731,3 +731,12 @@
 #ikarus_image_viewer.ikarus-viewer-zoomed.ikarus-viewer-panning .ikarus-viewer-stage img{cursor:grabbing}
 /* Hidden-detail viewer: a thicker frame around the image so the window can always be grabbed, even when the image fills the stage. */
 #ikarus_image_viewer.details-hidden .ikarus-viewer-stage{box-sizing:border-box;border:14px solid #1a120d}
+
+.ikarus-reference-editor,.ikarus-reference-settings{display:grid;gap:8px;margin:12px 0;padding:10px;border:1px solid #65451f;border-radius:6px}.ikarus-reference-editor img{display:block;max-width:100%;max-height:220px;object-fit:contain}.ikarus-reference-settings input[type=range]{width:100%}
+
+.ikarus-reference-editor { margin: 10px 0; display: flex; flex-direction: column; gap: 7px; }
+#ikarus_rep_reference_preview img { display: block; max-width: 100%; max-height: 240px; object-fit: contain; border-radius: 5px; }
+#ikarus_rep_reference_preview span { display: block; overflow-wrap: anywhere; font-size: 0.85em; }
+
+.ikarus-reference-editor input[type="file"] { display: block !important; width: 100%; max-width: 100%; font-size: 0.9em; }
+.ikarus-reference-editor [hidden] { display: none !important; }

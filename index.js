@@ -1,3 +1,4 @@
+import { selectReferences, injectReferencePayload, FIELD_CAPABILITIES, makePendingRequests } from './references.js';
 // ==========================================================================
 // IkarusAutoImage — SillyTavern Extension
 // Auto-image generation with presets, replacements (with children hierarchy),
@@ -47,6 +48,8 @@ const DEFAULT_SETTINGS = {
     charPrefixes: {},
     // Replacements: {id, name, scope, charId, trigger, matchMode, replacement, caption, replaceMode, priority, parentId, enabled, folder}
     replacements: [],
+    referenceLimit: 0,
+    referenceMaxSide: 1024,
     repFieldMode: 'tags', // 'tags' or 'caption' — which field to use during replacement
     repFolders: [], // folder names for organizing global replacements
     repCategories: [], // category names (parent of folders)
@@ -240,6 +243,9 @@ function updateUI() {
         $('#ikarus_invert_order').prop('checked', es.invertProcessingOrder);
         $('#ikarus_auto_clean').prop('checked', es.autoClean);
         $('#ikarus_auto_fix_pic').prop('checked', es.autoFixPicFormat);
+        $('#ikarus_reference_limit').val(es.referenceLimit ?? 0);
+        $('#ikarus_reference_max_side').val(es.referenceMaxSide ?? 1024);
+        $('#ikarus_reference_max_side_value').text(es.referenceMaxSide ?? 1024);
         $('#ikarus_filter_native_sd').prop('checked', es.filterNativeSd);
         $('#ikarus_filter_imagine').prop('checked', es.filterImagine);
         $('#ikarus_dc_mode').val(es.doubleCleaner?.mode || 'none');
@@ -490,7 +496,90 @@ function renderRepCard(r, isChild) {
     </div>`;
 }
 
+// Reference plans travel with individual prompt events, never with a mutable global "last image".
+const _referencePlans = new Map();
+const _pendingReferenceRequests = makePendingRequests();
+let _referenceEditorImage = null;
+let _referenceUploadVersion = 0;
+
+function setReferenceEditor(image) {
+    _referenceUploadVersion++;
+    _referenceEditorImage = image;
+    const preview = $('#ikarus_rep_reference_preview').empty().prop('hidden', !image);
+    if (image) {
+        $('<img>').attr({ src: image.dataUrl, alt: image.name || 'Reference image' }).appendTo(preview);
+        $('<span>').text(image.name || 'Reference image').appendTo(preview);
+    }
+    $('#ikarus_rep_reference_file').val('');
+}
+
+function referenceFormHTML(image = null) {
+    return `<label>Reference image (Krea2)</label><div class="ikarus-reference-editor"><input class="ikarus-mgr-reference-file" type="file" accept="image/png,image/jpeg,image/webp"><div class="ikarus-mgr-reference-preview">${image ? `<img src="${esc(image.dataUrl)}" alt="${esc(image.name || 'Reference image')}" style="max-width:100%;max-height:200px;object-fit:contain"><span>${esc(image.name || '')}</span>` : ''}</div><button type="button" class="menu_button ikarus-mgr-reference-remove">Remove reference</button></div>`;
+}
+
+function bindReferenceControls() {
+    $('#ikarus_reference_limit').val(s().referenceLimit ?? 0).on('change', function () {
+        s().referenceLimit = Math.max(0, Math.floor(Number(this.value) || 0)); this.value = s().referenceLimit; saveSettingsDebounced();
+    });
+    $('#ikarus_reference_max_side').val(s().referenceMaxSide ?? 1024).on('input change', function () {
+        s().referenceMaxSide = Math.min(2048, Math.max(0, Number(this.value) || 0));
+        $('#ikarus_reference_max_side_value').text(s().referenceMaxSide); saveSettingsDebounced();
+    });
+    $('#ikarus_reference_max_side_value').text(s().referenceMaxSide ?? 1024);
+    $('#ikarus_rep_reference_remove').on('click', () => setReferenceEditor(null));
+    $('#ikarus_rep_reference_file').on('change', async function () {
+        const file = this.files?.[0];
+        if (!file) return;
+        const version = ++_referenceUploadVersion;
+        $('#ikarus_rep_add').prop('disabled', true);
+        try {
+            if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 25 * 1024 * 1024) throw new Error('Choose a PNG, JPEG, or WebP image up to 25 MB.');
+            // Keep original pixels: the request size slider controls Forge's reference preprocessing.
+            const dataUrl = await new Promise((resolve, reject) => {
+                const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('Cannot read image')); reader.readAsDataURL(file);
+            });
+            const image = new Image(); image.src = dataUrl;
+            await image.decode();
+            if (version !== _referenceUploadVersion) return;
+            setReferenceEditor({ dataUrl, name: file.name, width: image.naturalWidth, height: image.naturalHeight });
+        } catch (error) { toastr.error(error.message, 'Reference image'); }
+        finally { $('#ikarus_rep_add').prop('disabled', false); }
+    });
+}
+
+function queueReferencePlan(prompt) {
+    const plan = _referencePlans.get(String(prompt || ''));
+    if (plan && Date.now() - plan.at < 120000) _pendingReferenceRequests.add(prompt, plan);
+}
+
+function installReferenceRequestHook() {
+    const key = Symbol.for('IkarusAutoImage.referenceFetch');
+    // Keep one wrapper across extension reloads, with the current module's request handler.
+    const handle = async (input, init) => {
+        const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, location.href);
+        if (url.origin !== location.origin || !url.pathname.endsWith('/api/sd/generate')) return null;
+        const body = init?.body ?? (input instanceof Request ? await input.clone().text() : null);
+        if (typeof body !== 'string') return null;
+        const payload = JSON.parse(body);
+        const plan = _pendingReferenceRequests.take(payload.prompt);
+        if (!plan) return null;
+        const updated = injectReferencePayload(payload, plan);
+        if (updated === payload) return null;
+        return { ...init, body: JSON.stringify(updated) };
+    };
+    if (window[key]) { window[key].handle = handle; return; }
+    const state = window[key] = { handle };
+    const original = window.fetch;
+    window.fetch = async function (input, init) {
+        // Preserve the native request's headers, credentials, and abort signal.
+        const updated = await state.handle(input, init);
+        return original.call(this, input, updated || init);
+    };
+}
+installReferenceRequestHook();
+
 function resetReplacementEditor() {
+    setReferenceEditor(null);
     _editingReplacementId = null;
     _addChildParentId = null;
     $('#ikarus_rep_add').removeData('parent-id').text('Add Replacement');
@@ -515,7 +604,7 @@ function addReplacement(parentId) {
     if (!trigger) { toastr.warning('Trigger is required'); return; }
     if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
     const existing = _editingReplacementId ? s().replacements.find(r => r.id === _editingReplacementId) : null;
-    const ruleData = { name: name || trigger, trigger, matchMode, triggerGroups, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement, shortTag: shortTag || '', replaceMode, priority };
+    const ruleData = { referenceImage: _referenceEditorImage, name: name || trigger, trigger, matchMode, triggerGroups, replacement: replacement || caption || krea2, caption: caption || replacement || krea2, krea2: krea2 || caption || replacement, shortTag: shortTag || '', replaceMode, priority };
     if (existing) {
         Object.assign(existing, ruleData);
         saveSettingsDebounced(); renderReplacementList(); resetReplacementEditor();
@@ -530,6 +619,7 @@ function addReplacement(parentId) {
 function editReplacement(id) {
     const r = s().replacements.find(x => x.id === id);
     if (!r) return;
+    setReferenceEditor(r.referenceImage || null);
     _editingReplacementId = r.id;
     _addChildParentId = null;
     $('#ikarus_rep_add').removeData('parent-id').text('Update Replacement');
@@ -839,6 +929,7 @@ function openGlobalManager() {
                 <label>Tags (🏷️)</label><textarea class="text_pole mgr-ed-replacement" rows="2">${esc(r.replacement || '')}</textarea>
                 <label>Caption (💬)</label><textarea class="text_pole mgr-ed-caption" rows="2">${esc(r.caption || '')}</textarea>
                 <label>Krea 2 (K2)</label><textarea class="text_pole mgr-ed-krea2" rows="2">${esc(r.krea2 || '')}</textarea>
+                ${referenceFormHTML(r.referenceImage)}
                 <label>Dedupe tag (🔁)</label><input class="text_pole mgr-ed-short-tag" value="${esc(r.shortTag || '')}" placeholder="e.g. darkness \\(konosuba\\) — used for 2nd+ occurrences in 'First full' mode" />
                 <label>Match</label>
                 <select class="text_pole mgr-ed-match">
@@ -858,7 +949,7 @@ function openGlobalManager() {
                 <button class="menu_button ikarus-mgr-save" data-id="${esc(rid)}">💾 Save</button>
                 <button class="menu_button ikarus-mgr-cancel" data-id="${esc(rid)}">Cancel</button>
             </div>
-        `).slideDown(150);
+        `).data("referenceImage", r.referenceImage || null).slideDown(150);
     }
 
     function showAddForm() {
@@ -877,6 +968,7 @@ function openGlobalManager() {
                 <label>Tags (🏷️)</label><textarea class="text_pole mgr-new-replacement" rows="2" placeholder="e.g. &lt;lora:AnimaBloom:1&gt;Bloom,"></textarea>
                 <label>Caption (💬)</label><textarea class="text_pole mgr-new-caption" rows="2" placeholder="Same as tags, or a descriptive caption"></textarea>
                 <label>Krea 2 (K2)</label><textarea class="text_pole mgr-new-krea2" rows="2" placeholder="Krea 2-specific replacement (optional)"></textarea>
+                ${referenceFormHTML()}
                 <label>Match</label>
                 <select class="text_pole mgr-new-match"><option value="OR">OR</option><option value="AND">AND</option><option value="CHILD">CHILD</option></select>
                 <label>Priority</label><input class="text_pole mgr-new-priority" type="number" value="0" />
@@ -995,11 +1087,34 @@ function openGlobalManager() {
     overlay.on('click', '.ikarus-mgr-edit', function () {
         showEditForm($(this).data('id'));
     });
+    overlay.on('change', '.ikarus-mgr-reference-file', async function () {
+        const file = this.files?.[0]; if (!file) return;
+        const form = $(this).closest('[id^="ikarus_mgr_editform_"], #ikarus_mgr_addform');
+        const buttons = form.find('.ikarus-mgr-save, #ikarus_mgr_addconfirm').prop('disabled', true);
+        const version = (form.data('referenceVersion') || 0) + 1; form.data('referenceVersion', version);
+        try {
+            if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type) || file.size > 25 * 1024 * 1024) throw new Error('Choose a PNG, JPEG, or WebP image up to 25 MB.');
+            const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('Cannot read image')); reader.readAsDataURL(file); });
+            const image = new Image(); image.src = dataUrl; await image.decode();
+            if (form.data('referenceVersion') !== version) return;
+            form.data('referenceImage', { dataUrl, name: file.name, width: image.naturalWidth, height: image.naturalHeight });
+            const preview = form.find('.ikarus-mgr-reference-preview').empty();
+            $('<img>').attr({ src: dataUrl, alt: file.name }).css({ maxWidth: '100%', maxHeight: '200px', objectFit: 'contain' }).appendTo(preview);
+            $('<span>').text(file.name).appendTo(preview);
+        } catch (error) { toastr.error(error.message, 'Reference image'); }
+        finally { buttons.prop('disabled', false); }
+    });
+    overlay.on('click', '.ikarus-mgr-reference-remove', function () {
+        const form = $(this).closest('[id^="ikarus_mgr_editform_"], #ikarus_mgr_addform');
+        form.data('referenceVersion', (form.data('referenceVersion') || 0) + 1).data('referenceImage', null);
+        form.find('.ikarus-mgr-reference-preview').empty(); form.find('.ikarus-mgr-reference-file').val('');
+    });
     // Save edit
     overlay.on('click', '.ikarus-mgr-save', function () {
         const rid = $(this).data('id');
         const r = (es.replacements || []).find(x => x.id === rid); if (!r) return;
         const form = $(`#ikarus_mgr_editform_${esc(rid)}`);
+        r.referenceImage = form.data('referenceImage') || null;
         r.name = form.find('.mgr-ed-name').val()?.trim() || r.name;
         r.trigger = form.find('.mgr-ed-trigger').val()?.trim() || r.trigger;
         r.replacement = form.find('.mgr-ed-replacement').val()?.trim() || r.replacement;
@@ -1029,6 +1144,7 @@ function openGlobalManager() {
         if (!replacement && !caption && !krea2) { toastr.warning('Tags, Caption, or Krea 2 text is required'); return; }
         es.replacements.push({
             id: uid(),
+            referenceImage: $('#ikarus_mgr_addform').data('referenceImage') || null,
             name: $('#ikarus_mgr_addform .mgr-new-name').val()?.trim() || trigger,
             scope: 'global', charId: null,
             trigger,
@@ -1241,7 +1357,7 @@ function closeGlobalManager() {
 // ==========================================================================
 // PROCESSING: Apply Replacements (in-place, with children priority)
 // ==========================================================================
-function applyReplacements(text) {
+function applyReplacements(text, referenceMatches = []) {
     if (s().replacementsEnabled === false) return text;
     const all = activeItems(s().replacements || []);
     if (!all.length) return text;
@@ -1256,6 +1372,7 @@ function applyReplacements(text) {
 
     for (const parent of parents) {
         if (triggerMatches(result, parent)) {
+            referenceMatches.push(parent);
             firedParents.add(parent.id);
             result = doReplace(result, parent);
             console.log(`[${EXT}] Replacement "${parent.name}" [P${parent.priority || 0}] applied`);
@@ -1289,6 +1406,7 @@ function applyReplacements(text) {
 
             // Check if trigger words are present in the text
             if (keywords.some(kw => result.toLowerCase().includes(kw))) {
+                referenceMatches.push(child);
                 result = doReplace(result, child);
                 // Claim these keywords so lower-priority children can't use them
                 keywords.forEach(kw => claimedKeywords.add(kw));
@@ -1297,6 +1415,7 @@ function applyReplacements(text) {
         } else {
             // OR/AND mode: works independently, no parent dependency
             if (triggerMatches(result, child)) {
+                referenceMatches.push(child);
                 result = doReplace(result, child);
                 console.log(`[${EXT}] Child "${child.name}" [${mode}, P${child.priority || 0}] applied`);
             }
@@ -1466,6 +1585,8 @@ function processPrompt(prompt, negative) {
     const es = s();
     let p = String(prompt || '');
     let n = String(negative || '');
+    const referenceMatches = [];
+    const referenceSource = joinPrompt(getCharPrefix(), p);
 
     const prefix = getCharPrefix();
     if (prefix) {
@@ -1475,10 +1596,10 @@ function processPrompt(prompt, negative) {
     if (es.invertProcessingOrder) {
         // Filters first
         const fResult = applyFiltersToPrompt(p, n); p = fResult.prompt; n = fResult.negative;
-        p = applyReplacements(p);
+        p = applyReplacements(p, referenceMatches);
     } else {
         // Replacements first (default)
-        p = applyReplacements(p);
+        p = applyReplacements(p, referenceMatches);
         const fResult = applyFiltersToPrompt(p, n); p = fResult.prompt; n = fResult.negative;
     }
 
@@ -1488,6 +1609,9 @@ function processPrompt(prompt, negative) {
     p = applyDoubleCleaner(p);
     n = applyDoubleCleaner(n);
 
+    const references = selectReferences(referenceSource, referenceMatches, es.repFieldMode, es.referenceLimit);
+    _referencePlans.set(p, { references, mode: es.repFieldMode, maxSide: es.referenceMaxSide ?? 1024, at: Date.now() });
+    for (const [key, plan] of _referencePlans) if (Date.now() - plan.at > 120000 || _referencePlans.size > 100) _referencePlans.delete(key);
     return { prompt: p, negative: n };
 }
 
@@ -1505,15 +1629,17 @@ function markProcessedSdPrompt(prompt) {
 function handleGlobalSdPromptProcessing(eventData) {
     try {
         const es = s();
-        if (!es.filterNativeSd) return;
+        if (!es.filterNativeSd) { queueReferencePlan(eventData?.prompt); return; }
         if (!eventData || typeof eventData.prompt !== 'string') return;
 
         const originalPrompt = eventData.prompt;
         if (_processedSdPrompts.delete(originalPrompt)) {
+            queueReferencePlan(originalPrompt);
             return;
         }
 
         const processed = processPrompt(originalPrompt, '');
+        queueReferencePlan(processed.prompt);
         if (processed.prompt !== originalPrompt) {
             eventData.prompt = processed.prompt;
             console.log(`[${EXT}] Global /sd prompt filtered before image generation`);
@@ -3459,6 +3585,7 @@ async function createSettings(html) {
     $('#ikarus_rep_trigger_groups').on('click', '.ikarus-trigger-group-remove', function () {
         $(this).closest('.ikarus-trigger-group').remove();
     });
+    bindReferenceControls();
     $('#ikarus_rep_scope_global').on('click', function () { currentRepScope = 'global'; $(this).addClass('active'); $('#ikarus_rep_scope_char').removeClass('active'); renderReplacementList(); });
     $('#ikarus_rep_scope_char').on('click', function () { currentRepScope = 'char'; $(this).addClass('active'); $('#ikarus_rep_scope_global').removeClass('active'); $(this).text(`👤 ${getCurrentCharName()}`); renderReplacementList(); });
     $('#ikarus_rep_add').on('click', function () {
@@ -3591,3 +3718,30 @@ $(function () {
         console.log(`[${EXT}] Extension loaded`);
     })();
 });
+
+
+// Public Ikarus image planner: reads active guidance and connection on EVERY request.
+globalThis.IkarusAutoImage = {
+    version: 1,
+    getImageGuidance: () => getPromptInjectionText().promptText || '',
+    async requestImagePrompt({ system, context, signal }) {
+        const cancelled = () => { if (signal?.aborted) throw new DOMException('Image planning cancelled', 'AbortError'); };
+        cancelled();
+        const es = s(), ctx = getContext();
+        const profile = es.standalone?.profile || es.separateProfile || '';
+        const result = await sendRequestWithNativeFallback(ctx, profile,
+            [{role:'system',content:system},{role:'user',content:context}],
+            {stream:true,signal}, `${system}\n\n${context}`, 'Ikarus game images');
+        cancelled();
+        let text = '';
+        if (typeof result === 'function') {
+            const iterator = result();
+            try { for await (const chunk of iterator) { cancelled(); if (chunk?.text !== undefined) text = chunk.text; } }
+            finally { if (signal?.aborted) await iterator.return?.(); }
+        } else text = typeof result === 'string' ? result : result?.content || result?.text || result?.choices?.[0]?.message?.content || '';
+        cancelled();
+        if (!text.trim()) throw new Error('IkarusAutoImage returned an empty image prompt.');
+        return text;
+    },
+    prepareImageCommand: () => { wrapImagineCommand(); },
+};

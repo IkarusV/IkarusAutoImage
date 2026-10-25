@@ -84,3 +84,8 @@ Added a standalone mode that spawn a pop up window that can be opened and closed
 ## License
 
 MIT
+
+
+## Reference images for Krea2 editing
+
+Replacement rules now support an optional uploaded reference image with a visible preview in both the standard editor and Global Manager. Krea2 mode sends images from fired rules through Forge Neo's native ImageStitch API and automatically includes the edit LoRA. Reference count and size controls are under Replacements. Tags and Caption remain text-only. See [REFERENCE_IMAGES.md](REFERENCE_IMAGES.md) for usage, API details, and adding future reference-capable fields.
