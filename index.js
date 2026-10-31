@@ -2836,11 +2836,12 @@ function aiEditorCharacterRules(includeChildren = false) {
 }
 
 function parseAiEditorFlags(text) {
-    const out = { remove: new Set(), create: new Set(), createAll: false };
-    const regex = /--(remove|create)\s+([^\n]*?)(?=\s--(?:remove|create)\b|\n|$)/gi;
+    const out = { remove: new Set(), create: new Set(), createAll: false, createRequested: false };
+    const regex = /--(remove|create)(?:\s+([^\n]*?))?(?=\s--(?:remove|create)\b|\n|$)/gi;
     for (const m of String(text || '').matchAll(regex)) {
         const kind = m[1].toLowerCase();
-        for (let name of m[2].split(',')) {
+        if (kind === 'create') out.createRequested = true;
+        for (let name of String(m[2] || '').split(',')) {
             name = name.trim().replace(/^[("'\[]+|[)"'\]]+$/g, '').trim().toLowerCase();
             if (!name) continue;
             if (kind === 'create' && (name === '*' || name === 'all')) out.createAll = true;
@@ -3020,7 +3021,10 @@ function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
             parent = resolveParent(c.parentRef, null);
             if (parent.error) { ignored.push(`Create "${c.name}": ${parent.error}`); continue; }
         }
-        const allowed = flags.createAll || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
+        // Ultimate control makes one explicit --create permission authorize the whole create batch.
+        // The explicit command is still mandatory; without it, creations remain blocked.
+        const allowed = flags.createAll || (ultimate && flags.createRequested)
+            || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
         if (!allowed) { ignored.push(`Create "${c.name}": missing --create ${parent ? parent.name : c.name}`); continue; }
         if (!c.fields.krea2 && !c.fields.replacement && !c.fields.caption) { ignored.push(`Create "${c.name}": no replacement text`); continue; }
         if (c.fields.triggerGroups) c.fields.triggerGroups = aiEditorFixGroups(c.fields.triggerGroups, !!parent);
