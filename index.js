@@ -2836,7 +2836,7 @@ function aiEditorCharacterRules(includeChildren = false) {
 }
 
 function parseAiEditorFlags(text) {
-    const out = { remove: new Set(), create: new Set(), createAll: false, createRequested: false };
+    const out = { remove: new Set(), create: new Set(), createAll: false, createRequested: /(?:^|\s)--create(?:\s|$)/i.test(String(text || '')) };
     const regex = /--(remove|create)(?:\s+([^\n]*?))?(?=\s--(?:remove|create)\b|\n|$)/gi;
     for (const m of String(text || '').matchAll(regex)) {
         const kind = m[1].toLowerCase();
@@ -2967,6 +2967,7 @@ function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
     for (const op of ops) {
         if (!op || typeof op !== 'object') continue;
         const action = aiEditorKey(op.action || 'update');
+        const isCreateAction = action === 'create' || action === 'add' || action === 'new' || action.startsWith('create_') || action.startsWith('add_');
         const target = byId.get(op.id) || byName.get(aiEditorKey(op.name));
         const label = String(op.name || op.id || '(unnamed)');
 
@@ -2983,7 +2984,7 @@ function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
         }
         const fields = aiEditorPickFields(op, mode, ultimate);
         const parentRef = aiEditorParentRef(op, ultimate);
-        if (action === 'create' && !target) {
+        if (isCreateAction && !target) {
             const name = String(op.name || '').trim();
             if (!name) { ignored.push('Create: missing name'); continue; }
             if (creates.some(c => aiEditorKey(c.name) === aiEditorKey(name))) continue;
@@ -3023,8 +3024,9 @@ function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
         }
         // Ultimate control makes one explicit --create permission authorize the whole create batch.
         // The explicit command is still mandatory; without it, creations remain blocked.
-        const allowed = flags.createAll || (ultimate && flags.createRequested)
-            || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
+        const createPermission = flags.createAll || flags.createRequested || flags.create.size > 0;
+        const allowed = (ultimate && createPermission)
+            || flags.createAll || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
         if (!allowed) { ignored.push(`Create "${c.name}": missing --create ${parent ? parent.name : c.name}`); continue; }
         if (!c.fields.krea2 && !c.fields.replacement && !c.fields.caption) { ignored.push(`Create "${c.name}": no replacement text`); continue; }
         if (c.fields.triggerGroups) c.fields.triggerGroups = aiEditorFixGroups(c.fields.triggerGroups, !!parent);
