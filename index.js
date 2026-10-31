@@ -3025,8 +3025,10 @@ function buildAiEditorPlan(raw, mode, flags, rules, ultimate = false) {
         // Ultimate control makes one explicit --create permission authorize the whole create batch.
         // The explicit command is still mandatory; without it, creations remain blocked.
         const createPermission = flags.createAll || flags.createRequested || flags.create.size > 0;
-        const allowed = (ultimate && createPermission)
-            || flags.createAll || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
+        // Ultimate control explicitly authorizes field edits and creation in the same response.
+        // Deletion remains separately protected by --remove because it is destructive.
+        const allowed = ultimate || flags.createAll || flags.createRequested
+            || flags.create.has(aiEditorKey(c.name)) || (parent && flags.create.has(aiEditorKey(parent.name)));
         if (!allowed) { ignored.push(`Create "${c.name}": missing --create ${parent ? parent.name : c.name}`); continue; }
         if (!c.fields.krea2 && !c.fields.replacement && !c.fields.caption) { ignored.push(`Create "${c.name}": no replacement text`); continue; }
         if (c.fields.triggerGroups) c.fields.triggerGroups = aiEditorFixGroups(c.fields.triggerGroups, !!parent);
